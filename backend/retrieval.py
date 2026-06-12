@@ -162,6 +162,8 @@ def _keyword_query_tokens(query: str) -> list[str]:
     if keywords:
         return keywords
     return [token for token in re.findall(r"[a-zA-Z0-9]+", str(query or "").lower()) if len(token) >= 3]
+
+
 def _is_near_duplicate(text_a: str, text_b: str, threshold: float = 0.85) -> bool:
     tokens_a = _tokenize(text_a)
     tokens_b = _tokenize(text_b)
@@ -319,9 +321,6 @@ def retrieve_chunks(
             "status": "no_context",
         }
 
-    query_keywords = _extract_query_keywords(query)
-    logger.info("[RAG] Keywords: %s", query_keywords)
-    query_tokens = _keyword_query_tokens(query)
     embed_model = _get_embed_model()
     BGE_QUERY_PREFIX = "Represent this sentence for searching relevant passages: "
     query_embedding = embed_model.encode(
@@ -329,6 +328,21 @@ def retrieve_chunks(
         show_progress_bar=False,
         normalize_embeddings=True,
     ).tolist()
+    return _retrieve_with_embedding(query, query_embedding, top_k, collection, total_chunks, document_id)
+
+
+def _retrieve_with_embedding(
+    query: str,
+    query_embedding: list[float],
+    top_k: int,
+    collection,
+    total_chunks: int,
+    document_id: str | None = None,
+) -> RetrievalResult:
+    """Vector search with the given embedding + BM25 on the original query string, fused via RRF."""
+    query_keywords = _extract_query_keywords(query)
+    logger.info("[RAG] Keywords: %s", query_keywords)
+    query_tokens = _keyword_query_tokens(query)
 
     vector_k = min(max(5, int(top_k)), total_chunks)
     where = {"doc_id": document_id} if document_id else None
@@ -500,8 +514,8 @@ def retrieve_chunks(
             "retrieval_score": None,
             "status": "no_context",
         }
+
     # RRF hybrid scoring: combines vector and BM25 ranks without needing score normalization
-    # Sort by each signal to get ranks, then fuse
     by_vector = sorted(candidates, key=lambda c: c.get("vector_score", 0.0), reverse=True)
     by_bm25 = sorted(candidates, key=lambda c: c.get("bm25_score", 0.0), reverse=True)
     vector_rank = {id(c): i for i, c in enumerate(by_vector)}
@@ -552,3 +566,36 @@ def retrieve_chunks(
         "retrieval_score": None,
         "status": "ok",
     }
+
+
+def retrieve_chunks_hyde(
+    query: str,
+    hypothetical_embedding: list[float],
+    top_k: int = 3,
+    document_id: str | None = None,
+) -> RetrievalResult:
+    """Like retrieve_chunks but uses a pre-computed hypothetical-document embedding for vector search.
+
+    BM25 still runs on the original query string's keywords, so the two signals complement each other.
+    """
+    collection = get_collection()
+    total_chunks = int(collection.count())
+
+    if total_chunks <= 0:
+        _write_retrieval_audit(
+            query=query,
+            top_scores=[],
+            number_of_chunks=0,
+            unique_doc_ids=[],
+            hallucination_guard_triggered=True,
+            threshold_decision=_threshold_decision([]),
+        )
+        return {
+            "chunks": [],
+            "context": "No relevant context found in documents.",
+            "guard_fired": True,
+            "retrieval_score": None,
+            "status": "no_context",
+        }
+
+    return _retrieve_with_embedding(query, hypothetical_embedding, top_k, collection, total_chunks, document_id)

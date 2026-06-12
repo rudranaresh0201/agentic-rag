@@ -118,7 +118,11 @@ export async function queryApi(query) {
         })),
       ],
       route: data.route,
-      steps: data.steps,
+      steps: data.steps || [],
+      media_result: data.media_result || null,
+      gmail_results: data.gmail_results || [],
+      calendar_results: data.calendar_results || [],
+      action_id: data.action_id || null,
     };
   } catch (error) {
     throw buildApiError(error, "Model is loading, please wait...");
@@ -160,7 +164,11 @@ export async function queryRagByDocument(query, documentId) {
         })),
       ],
       route: data.route,
-      steps: data.steps,
+      steps: data.steps || [],
+      media_result: data.media_result || null,
+      gmail_results: data.gmail_results || [],
+      calendar_results: data.calendar_results || [],
+      action_id: data.action_id || null,
     };
   } catch (error) {
     throw buildApiError(error, "Model is loading, please wait...");
@@ -269,4 +277,30 @@ export async function resetRag() {
   } catch (error) {
     throw buildApiError(error, "Failed to clear documents.");
   }
+}
+
+export async function getPendingActions() {
+  try {
+    const res = await apiFetch(`${API_BASE}/actions/pending`);
+    if (!res.ok) return [];
+    const data = await res.json();
+    return data.actions || [];
+  } catch {
+    return [];
+  }
+}
+
+export async function confirmAction(actionId) {
+  const res = await apiFetch(`${API_BASE}/actions/confirm/${actionId}`, { method: "POST" });
+  if (!res.ok) {
+    const d = await res.json().catch(() => ({}));
+    throw new Error(d.detail || `Error ${res.status}`);
+  }
+  return res.json();
+}
+
+export async function cancelAction(actionId) {
+  const res = await apiFetch(`${API_BASE}/actions/cancel/${actionId}`, { method: "POST" });
+  if (!res.ok) throw new Error(`Error ${res.status}`);
+  return res.json();
 }

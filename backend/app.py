@@ -20,6 +20,11 @@ from .api.routes_core import router as core_router
 from .api.routes_query import router as query_router
 from .api.routes_documents import router as documents_router
 from backend.api.routes_agent import router as agent_router
+from backend.mcp.routes_mcp import router as mcp_router
+from backend.api.routes_memory import router as memory_router
+from backend.api.routes_actions import router as actions_router
+from backend.api.routes_voice import router as voice_router
+from backend.api.routes_scheduler import router as scheduler_router
 from .tasks import load_task_state_on_startup
 
 app = FastAPI(title="PDF RAG Backend", version="2.0.0")
@@ -38,6 +43,21 @@ app.add_middleware(
 async def global_exception_handler(_: Request, exc: Exception):
     logger.exception("[ERROR] Unhandled exception")
     return JSONResponse(status_code=500, content={"detail": "Internal server error"})
+
+
+@app.on_event("startup")
+async def startup_scheduler() -> None:
+    from backend.scheduler.proactive import start_scheduler
+    try:
+        start_scheduler()
+    except Exception as exc:
+        logger.exception("[ERROR] Scheduler startup failed: %s", exc)
+
+
+@app.on_event("shutdown")
+async def shutdown_scheduler() -> None:
+    from backend.scheduler.proactive import stop_scheduler
+    stop_scheduler()
 
 
 @app.on_event("startup")
@@ -64,6 +84,11 @@ app.include_router(core_router)
 app.include_router(query_router)
 app.include_router(documents_router)
 app.include_router(agent_router)
+app.include_router(mcp_router)
+app.include_router(memory_router)
+app.include_router(actions_router)
+app.include_router(voice_router)
+app.include_router(scheduler_router)
 
 
 if __name__ == "__main__":

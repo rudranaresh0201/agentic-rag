@@ -1,3 +1,7 @@
+import EmailCard from "./EmailCard";
+import EventCard from "./EventCard";
+import MediaPlayer from "./MediaPlayer";
+
 export default function MessageBubble({ message }) {
   const text = message?.content || message?.text || "";
 
@@ -12,53 +16,37 @@ export default function MessageBubble({ message }) {
               text: String(src.text || "").trim(),
             };
           }
-
           if (typeof src === "string") {
-            return {
-              id: idx + 1,
-              document: "Uploaded Doc",
-              page: null,
-              text: src,
-            };
+            return { id: idx + 1, document: "Uploaded Doc", page: null, text: src };
           }
-
           return null;
         })
         .filter(Boolean)
     : [];
 
+  const gmailResults    = Array.isArray(message?.gmail_results)    ? message.gmail_results    : [];
+  const calendarResults = Array.isArray(message?.calendar_results) ? message.calendar_results : [];
+
   const scrollToSource = (sourceId) => {
     const el = document.getElementById(`source-${sourceId}`);
-    if (!el) {
-      return;
-    }
-
+    if (!el) return;
     el.scrollIntoView({ behavior: "smooth", block: "center" });
-    const originalBackground = el.style.background;
-    el.style.background = "#e0f2fe";
-    window.setTimeout(() => {
-      el.style.background = originalBackground;
-    }, 900);
+    const original = el.style.background;
+    el.style.background = "rgba(99,102,241,0.18)";
+    window.setTimeout(() => { el.style.background = original; }, 900);
   };
 
   const renderTextWithCitations = (value) => {
-    if (!value) {
-      return null;
-    }
-
+    if (!value) return null;
     const parts = String(value).split(/(\[\d+\])/g);
     return parts.map((part, idx) => {
       const match = part.match(/^\[(\d+)\]$/);
-      if (!match) {
-        return <span key={idx}>{part}</span>;
-      }
-
-      const citationId = Number(match[1]);
+      if (!match) return <span key={idx}>{part}</span>;
       return (
         <span
           key={idx}
-          className="citation"
-          onClick={() => scrollToSource(citationId)}
+          className="cursor-pointer font-medium text-indigo-400 hover:underline"
+          onClick={() => scrollToSource(Number(match[1]))}
         >
           {part}
         </span>
@@ -68,62 +56,61 @@ export default function MessageBubble({ message }) {
 
   return (
     <div>
-      <div className="text-content whitespace-pre-wrap">{renderTextWithCitations(text)}</div>
-      {sources.length > 0 && (
-        <div className="mt-4">
-          <div className="font-semibold text-sm mb-2">Sources</div>
+      {/* Answer text */}
+      <div className="whitespace-pre-wrap text-sm leading-relaxed text-slate-100">
+        {renderTextWithCitations(text)}
+      </div>
 
-          <div className="grid gap-2">
+      {/* Media player */}
+      {message?.media_result && <MediaPlayer media_result={message.media_result} />}
+
+      {/* Gmail results */}
+      {gmailResults.length > 0 && (
+        <div className="mt-3 space-y-2">
+          <p className="text-[10px] font-semibold uppercase tracking-wider text-slate-500">
+            📧 Gmail · {gmailResults.length} email{gmailResults.length !== 1 ? "s" : ""}
+          </p>
+          {gmailResults.map((email, i) => (
+            <EmailCard key={i} email={email} />
+          ))}
+        </div>
+      )}
+
+      {/* Calendar results */}
+      {calendarResults.length > 0 && (
+        <div className="mt-3 space-y-2">
+          <p className="text-[10px] font-semibold uppercase tracking-wider text-slate-500">
+            📅 Calendar · {calendarResults.length} event{calendarResults.length !== 1 ? "s" : ""}
+          </p>
+          {calendarResults.map((event, i) => (
+            <EventCard key={i} event={event} />
+          ))}
+        </div>
+      )}
+
+      {/* RAG source citations */}
+      {sources.length > 0 && (
+        <div className="mt-3">
+          <p className="mb-1.5 text-[10px] font-semibold uppercase tracking-wider text-slate-500">
+            Sources
+          </p>
+          <div className="space-y-1.5">
             {sources.map((src) => (
               <div
                 id={`source-${src.id}`}
                 key={src.id}
-                className="source-card"
+                className="rounded-lg border border-white/[0.07] bg-slate-950/60 p-2 transition-colors duration-300"
               >
-                <div className="source-title">
+                <p className="text-[10px] font-semibold text-slate-400">
                   [{src.id}] {src.document}
-                  {src.page ? ` • Page ${src.page}` : ""}
-                </div>
-
-                <div className="source-text">{src.text}</div>
+                  {src.page ? ` · Page ${src.page}` : ""}
+                </p>
+                <p className="mt-0.5 text-[11px] text-slate-400">{src.text}</p>
               </div>
             ))}
           </div>
         </div>
       )}
-
-      <style>{`
-        .source-card {
-          border-left: 3px solid #3b82f6;
-          padding: 8px;
-          margin-bottom: 8px;
-          background: #f9fafb;
-          border-radius: 6px;
-          transition: background-color 0.25s ease;
-        }
-
-        .source-title {
-          font-size: 12px;
-          color: #374151;
-          margin-bottom: 4px;
-          font-weight: 600;
-        }
-
-        .source-text {
-          font-size: 14px;
-          color: #4b5563;
-        }
-
-        .citation {
-          color: #2563eb;
-          cursor: pointer;
-          font-weight: 500;
-        }
-
-        .citation:hover {
-          text-decoration: underline;
-        }
-      `}</style>
     </div>
   );
 }

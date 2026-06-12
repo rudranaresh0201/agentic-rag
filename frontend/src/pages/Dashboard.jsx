@@ -5,9 +5,14 @@ import {
   HiCheckBadge,
   HiDocumentText,
 } from "react-icons/hi2";
+import ActionConfirmModal from "../components/ActionConfirmModal";
+import BriefingBanner from "../components/BriefingBanner";
+import VoiceBar from "../components/VoiceBar";
+import AgentTheatre from "../components/AgentTheatre";
 import AnswerPanel from "../components/AnswerPanel";
 import ChatLayout from "../components/ChatLayout";
 import EvidencePanel from "../components/EvidencePanel";
+import MessageBubble from "../components/MessageBubble";
 import Sidebar from "../components/Sidebar";
 import StatusBanner from "../components/StatusBanner";
 import {
@@ -33,10 +38,7 @@ function normalizeDocuments(payload) {
 }
 
 function normalizeSources(sources) {
-  if (!Array.isArray(sources)) {
-    return [];
-  }
-
+  if (!Array.isArray(sources)) return [];
   return sources
     .map((source, index) => ({
       id: Number(source?.id) || index + 1,
@@ -78,6 +80,9 @@ function Dashboard() {
   const [retrievalScore, setRetrievalScore] = useState(null);
   const [statusMessage, setStatusMessage] = useState("");
   const [statusTone, setStatusTone] = useState("neutral");
+  // increments after each agent response — tells ActionConfirmModal to poll immediately
+  const [queryCount, setQueryCount] = useState(0);
+
   const answerAnchorRef = useRef(null);
   const messagesEndRef = useRef(null);
   const loadingTimeoutRef = useRef(null);
@@ -88,39 +93,26 @@ function Dashboard() {
 
   const latestAssistantMessage = useMemo(
     () => [...messages].reverse().find((item) => item.role === "assistant") || null,
-    [messages]
+    [messages],
   );
 
   const refreshDocuments = async () => {
     const data = await listDocuments();
-    const normalized = normalizeDocuments(data);
-    setUploadedFiles(normalized);
+    setUploadedFiles(normalizeDocuments(data));
   };
 
   useEffect(() => {
     let mounted = true;
-
     const bootstrap = async () => {
       try {
         const data = await listDocuments();
-        const normalized = normalizeDocuments(data);
-        if (!mounted) {
-          return;
-        }
-        setUploadedFiles(normalized);
-      } catch (err) {
-        if (!mounted) {
-          return;
-        }
-        setError("Failed to load documents.");
+        if (mounted) setUploadedFiles(normalizeDocuments(data));
+      } catch {
+        if (mounted) setError("Failed to load documents.");
       }
     };
-
     bootstrap();
-
-    return () => {
-      mounted = false;
-    };
+    return () => { mounted = false; };
   }, []);
 
   useEffect(() => {
@@ -128,9 +120,7 @@ function Dashboard() {
   }, [messages]);
 
   useEffect(() => {
-    if (!latestAssistantMessage) {
-      return;
-    }
+    if (!latestAssistantMessage) return;
     answerAnchorRef.current?.scrollIntoView({ behavior: "smooth", block: "start" });
   }, [latestAssistantMessage]);
 
@@ -138,41 +128,28 @@ function Dashboard() {
     setError("");
     setUploading(true);
     setUploadProgress(0);
-
     try {
       const data = await uploadPdf(file, () => setUploadProgress(100));
-
       if (data?.task_id) {
         const taskId = data.task_id;
         setProcessingDoc({ name: file.name, taskId });
         pollTaskStatus(taskId, {
           intervalMs: 2000,
-          onDone: async () => {
-            setProcessingDoc(null);
-            await refreshDocuments();
-          },
-          onError: () => {
-            setProcessingDoc(null);
-            setError("Processing failed");
-          },
+          onDone: async () => { setProcessingDoc(null); await refreshDocuments(); },
+          onError: () => { setProcessingDoc(null); setError("Processing failed"); },
         });
         return;
       }
-
       if (data?.doc_id || typeof data?.chunks === "number") {
         await refreshDocuments();
         setUploadProgress(100);
         return;
       }
-
       throw new Error("Invalid response");
     } catch {
       setError("Upload failed");
     } finally {
-      setTimeout(() => {
-        setUploading(false);
-        setUploadProgress(0);
-      }, 250);
+      setTimeout(() => { setUploading(false); setUploadProgress(0); }, 250);
     }
   };
 
@@ -182,9 +159,7 @@ function Dashboard() {
     try {
       await deleteDocument(fileId);
       await refreshDocuments();
-      if (activeDocumentId === fileId) {
-        setActiveDocumentId(null);
-      }
+      if (activeDocumentId === fileId) setActiveDocumentId(null);
     } catch {
       setError("Failed to delete document.");
     }
@@ -207,13 +182,7 @@ function Dashboard() {
   };
 
   const handleSend = async (nextQuery) => {
-    if (!nextQuery.trim()) {
-      return;
-    }
-
-    if (querying) {
-      return;
-    }
+    if (!nextQuery.trim() || querying) return;
 
     setQuerying(true);
     setError("");
@@ -227,43 +196,30 @@ function Dashboard() {
     setMessages((prev) => [...prev, { role: "user", content: ask }]);
 
     setLoadingMessage("Searching documents...");
-    loadingTimeoutRef.current = window.setTimeout(() => {
-      setLoadingMessage("Generating answer...");
-    }, 1200);
-    loadingSlowRef.current = window.setTimeout(() => {
-      setLoadingMessage("Still working... (large response)");
-    }, 5000);
+    loadingTimeoutRef.current = window.setTimeout(() => setLoadingMessage("Generating answer..."), 1200);
+    loadingSlowRef.current   = window.setTimeout(() => setLoadingMessage("Still working... (large response)"), 5000);
 
     try {
       const response = activeDocumentId
         ? await queryRagByDocument(ask, activeDocumentId)
         : await queryApi(ask);
 
-      const status = String(response?.status || "ok");
+      const status    = String(response?.status || "ok");
       const guardFired = Boolean(response?.guard_fired);
-      const score = Number.isFinite(Number(response?.retrieval_score))
-        ? Number(response.retrieval_score)
-        : null;
+      const score      = Number.isFinite(Number(response?.retrieval_score)) ? Number(response.retrieval_score) : null;
 
       setGuardWarning(guardFired);
       setRetrievalScore(score);
 
-      if (status === "busy") {
-        setStatusMessage("System busy - try again in a few seconds");
-        setStatusTone("warning");
-      } else if (status === "timeout") {
-        setStatusMessage("Request took too long - try a shorter query");
-        setStatusTone("warning");
-      } else if (status === "no_context") {
-        setStatusMessage("No relevant info found in your documents");
-        setStatusTone("neutral");
-      }
+      if (status === "busy")       { setStatusMessage("System busy - try again in a few seconds"); setStatusTone("warning"); }
+      else if (status === "timeout")    { setStatusMessage("Request took too long - try a shorter query"); setStatusTone("warning"); }
+      else if (status === "no_context") { setStatusMessage("No relevant info found in your documents"); setStatusTone("neutral"); }
 
-      const answer = String(response?.answer || "").trim();
+      const answer  = String(response?.answer || "").trim();
       const sources = normalizeSources(response?.sources);
       const confidence = score ?? confidenceFromSources(answer, sources);
 
-      if (answer && answer.length > 0) {
+      if (answer) {
         setMessages((prev) => [
           ...prev,
           {
@@ -275,32 +231,30 @@ function Dashboard() {
             status,
             guardFired,
             retrievalScore: score,
+            media_result:      response?.media_result      || null,
+            gmail_results:     response?.gmail_results     || [],
+            calendar_results:  response?.calendar_results  || [],
+            agent_steps:       response?.steps             || [],
+            action_id:         response?.action_id         || null,
           },
         ]);
+        setQueryCount((c) => c + 1);
       } else {
         setError("No response from model.");
       }
     } catch (err) {
-      if (err?.status === 429) {
-        setError("Too many requests - please wait a few seconds");
-      } else {
-        setError("Something went wrong. Please try again.");
-      }
+      setError(err?.status === 429 ? "Too many requests - please wait a few seconds" : "Something went wrong. Please try again.");
     } finally {
       setQuerying(false);
       setLoadingMessage("");
-      if (loadingTimeoutRef.current) {
-        window.clearTimeout(loadingTimeoutRef.current);
-      }
-      if (loadingSlowRef.current) {
-        window.clearTimeout(loadingSlowRef.current);
-      }
+      window.clearTimeout(loadingTimeoutRef.current);
+      window.clearTimeout(loadingSlowRef.current);
     }
   };
 
   const sortedFiles = useMemo(
     () => [...uploadedFiles].sort((a, b) => String(b.uploaded_at).localeCompare(String(a.uploaded_at))),
-    [uploadedFiles]
+    [uploadedFiles],
   );
 
   const sidebar = (
@@ -316,7 +270,7 @@ function Dashboard() {
       onClearAll={handleClearAll}
       clearing={clearing}
       collapsed={sidebarCollapsed}
-      onToggleCollapsed={() => setSidebarCollapsed((current) => !current)}
+      onToggleCollapsed={() => setSidebarCollapsed((c) => !c)}
     />
   );
 
@@ -334,15 +288,28 @@ function Dashboard() {
               className={`rounded-2xl border p-4 shadow-sm ${
                 isUser
                   ? "ml-auto max-w-[70%] border-white/10 bg-slate-800/90"
-                  : "mr-auto max-w-[75%] border-white/10 bg-slate-900/90"
+                  : "mr-auto max-w-[80%] border-white/10 bg-slate-900/90"
               }`}
             >
               <p className="mb-2 text-xs uppercase tracking-[0.18em] text-slate-400">
                 {isUser ? "You" : "Assistant"}
               </p>
-              <p className="whitespace-pre-wrap text-sm leading-relaxed text-slate-100">
-                {message.content}
-              </p>
+
+              {isUser ? (
+                <p className="whitespace-pre-wrap text-sm leading-relaxed text-slate-100">
+                  {message.content}
+                </p>
+              ) : (
+                <>
+                  {/* Agent theatre — sits above the answer */}
+                  {message.agent_steps?.length > 0 && (
+                    <div className="mb-3">
+                      <AgentTheatre agent_steps={message.agent_steps} />
+                    </div>
+                  )}
+                  <MessageBubble message={message} />
+                </>
+              )}
             </motion.div>
           );
         })}
@@ -352,7 +319,7 @@ function Dashboard() {
         <motion.div
           initial={{ opacity: 0 }}
           animate={{ opacity: 1 }}
-          className="mr-auto max-w-[75%] rounded-2xl border border-white/10 bg-slate-900/90 p-4"
+          className="mr-auto max-w-[80%] rounded-2xl border border-white/10 bg-slate-900/90 p-4"
         >
           <p className="text-xs uppercase tracking-[0.18em] text-slate-400">Assistant</p>
           <div className="mt-2 flex items-center gap-2 text-sm text-slate-200">
@@ -369,12 +336,13 @@ function Dashboard() {
     </div>
   );
 
-  const latestSources = latestAssistantMessage?.sources || [];
-  const latestAnswer = latestAssistantMessage?.content || "";
-  const latestQuery = latestAssistantMessage?.query || "";
-  const latestConfidence = latestAssistantMessage?.confidence || 0;
+  const latestSources        = latestAssistantMessage?.sources       || [];
+  const latestAnswer         = latestAssistantMessage?.content       || "";
+  const latestQuery          = latestAssistantMessage?.query         || "";
+  const latestConfidence     = latestAssistantMessage?.confidence    || 0;
+  const latestAgentSteps     = latestAssistantMessage?.agent_steps   || [];
   const latestRetrievalScore = latestAssistantMessage?.retrievalScore ?? retrievalScore ?? null;
-  const latestGuardFired = latestAssistantMessage?.guardFired ?? guardWarning;
+  const latestGuardFired     = latestAssistantMessage?.guardFired    ?? guardWarning;
 
   const rightPanel = (
     <div className="flex flex-col gap-4">
@@ -386,9 +354,7 @@ function Dashboard() {
               type="button"
               onClick={() => setActiveTab(tab)}
               className={`rounded-full px-3 py-1 text-xs font-semibold uppercase tracking-[0.12em] transition ${
-                activeTab === tab
-                  ? "bg-indigo-500 text-white"
-                  : "text-slate-300 hover:bg-white/10"
+                activeTab === tab ? "bg-indigo-500 text-white" : "text-slate-300 hover:bg-white/10"
               }`}
             >
               {tab}
@@ -419,17 +385,23 @@ function Dashboard() {
 
       <div className="scrollbar-thin flex-1 overflow-y-auto">
         {activeTab === "Answer" && (
-          <AnswerPanel
-            answer={latestAnswer}
-            query={latestQuery}
-            loading={querying}
-            loadingMessage={loadingMessage}
-            sources={latestSources}
-            guardFired={latestGuardFired}
-            statusMessage={statusMessage}
-            statusTone={statusTone}
-            answerRef={answerAnchorRef}
-          />
+          <div className="space-y-3">
+            {/* AgentTheatre above the answer panel in the right column */}
+            {latestAgentSteps.length > 0 && (
+              <AgentTheatre agent_steps={latestAgentSteps} />
+            )}
+            <AnswerPanel
+              answer={latestAnswer}
+              query={latestQuery}
+              loading={querying}
+              loadingMessage={loadingMessage}
+              sources={latestSources}
+              guardFired={latestGuardFired}
+              statusMessage={statusMessage}
+              statusTone={statusTone}
+              answerRef={answerAnchorRef}
+            />
+          </div>
         )}
 
         {activeTab === "Evidence" && <EvidencePanel sources={latestSources} query={latestQuery} />}
@@ -442,7 +414,7 @@ function Dashboard() {
                 <div className="rounded-xl border border-white/10 bg-slate-950/60 p-3">
                   <p className="text-xs text-slate-400">Questions Asked</p>
                   <p className="mt-1 text-2xl font-semibold text-slate-100">
-                    {messages.filter((item) => item.role === "user").length}
+                    {messages.filter((m) => m.role === "user").length}
                   </p>
                 </div>
                 <div className="rounded-xl border border-white/10 bg-slate-950/60 p-3">
@@ -477,8 +449,18 @@ function Dashboard() {
 
   return (
     <div className="relative min-h-screen bg-[#0f172a] text-slate-100">
+      {/* Action confirmation modal — rendered at root so it overlays everything */}
+      <ActionConfirmModal trigger={queryCount} />
+
+      <VoiceBar
+        onTranscript={handleSend}
+        answerToSpeak={latestAssistantMessage?.content}
+      />
+
       <div className="mx-auto max-w-[1400px] p-4 md:p-6">
+        <BriefingBanner />
         <StatusBanner rebuilding={rebuilding} processingDoc={processingDoc} />
+
         {error && (
           <motion.div
             initial={{ opacity: 0, y: -8 }}

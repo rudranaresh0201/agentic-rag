@@ -27,4 +27,16 @@ RAG_RRF_K = int(os.getenv("RAG_RRF_K", "60"))
 
 # ── Agent / LLM ────────────────────────────────────────────
 GROQ_MODEL = os.getenv("GROQ_MODEL", "llama-3.1-8b-instant")
+GROQ_WHISPER_MODEL = os.getenv("GROQ_WHISPER_MODEL", "whisper-large-v3-turbo")
 AGENT_WEB_RESULTS = int(os.getenv("AGENT_WEB_RESULTS", "5"))
+
+# ── Google OAuth ────────────────────────────────────────────
+GOOGLE_CLIENT_ID = os.getenv("GOOGLE_CLIENT_ID", "")
+GOOGLE_CLIENT_SECRET = os.getenv("GOOGLE_CLIENT_SECRET", "")
+GOOGLE_REDIRECT_URI = os.getenv("GOOGLE_REDIRECT_URI", "http://localhost:8003/mcp/callback")
+
+# ── YouTube ─────────────────────────────────────────────────
+YOUTUBE_API_KEY = os.getenv("YOUTUBE_API_KEY", "")
+
+# ── Scheduler ───────────────────────────────────────────────
+BRIEFING_HOUR = int(os.getenv("BRIEFING_HOUR", "8"))
