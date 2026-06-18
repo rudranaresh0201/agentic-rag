@@ -38,5 +38,9 @@ GOOGLE_REDIRECT_URI = os.getenv("GOOGLE_REDIRECT_URI", "http://localhost:8003/mc
 # ── YouTube ─────────────────────────────────────────────────
 YOUTUBE_API_KEY = os.getenv("YOUTUBE_API_KEY", "")
 
+# ── GitHub ──────────────────────────────────────────────────
+GITHUB_TOKEN    = os.getenv("GITHUB_TOKEN", "")
+GITHUB_USERNAME = os.getenv("GITHUB_USERNAME", "")
+
 # ── Scheduler ───────────────────────────────────────────────
 BRIEFING_HOUR = int(os.getenv("BRIEFING_HOUR", "8"))

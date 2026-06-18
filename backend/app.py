@@ -25,6 +25,7 @@ from backend.api.routes_memory import router as memory_router
 from backend.api.routes_actions import router as actions_router
 from backend.api.routes_voice import router as voice_router
 from backend.api.routes_scheduler import router as scheduler_router
+from backend.api.routes_url import router as url_router
 from .tasks import load_task_state_on_startup
 
 app = FastAPI(title="PDF RAG Backend", version="2.0.0")
@@ -89,6 +90,7 @@ app.include_router(memory_router)
 app.include_router(actions_router)
 app.include_router(voice_router)
 app.include_router(scheduler_router)
+app.include_router(url_router)
 
 
 if __name__ == "__main__":

@@ -1,20 +1,12 @@
-import { AnimatePresence, motion } from "framer-motion";
+import { motion } from "framer-motion";
 import { useEffect, useMemo, useRef, useState } from "react";
-import {
-  HiArrowTrendingUp,
-  HiCheckBadge,
-  HiDocumentText,
-} from "react-icons/hi2";
 import ActionConfirmModal from "../components/ActionConfirmModal";
+import ApprovalCard from "../components/ApprovalCard";
 import BriefingBanner from "../components/BriefingBanner";
-import VoiceBar from "../components/VoiceBar";
-import AgentTheatre from "../components/AgentTheatre";
-import AnswerPanel from "../components/AnswerPanel";
-import ChatLayout from "../components/ChatLayout";
-import EvidencePanel from "../components/EvidencePanel";
-import MessageBubble from "../components/MessageBubble";
+import ChatArea from "../components/ChatArea";
 import Sidebar from "../components/Sidebar";
-import StatusBanner from "../components/StatusBanner";
+import TopBar from "../components/TopBar";
+import VoiceBar from "../components/VoiceBar";
 import {
   deleteDocument,
   listDocuments,
@@ -23,10 +15,10 @@ import {
   queryRagByDocument,
   queryApi,
   resetRag,
+  ingestUrl,
 } from "../services/api";
 
-const TABS = ["Answer", "Evidence", "Insights"];
-
+// ── Pure helpers ──────────────────────────────────────────────────────────────
 function normalizeDocuments(payload) {
   return (payload?.documents || []).map((doc) => ({
     id: doc.doc_id,
@@ -60,42 +52,48 @@ function confidenceFromSources(answer, sources) {
   return Math.round(0.6 * sourceStrength + 0.4 * quality);
 }
 
+// ── Dashboard ─────────────────────────────────────────────────────────────────
 function Dashboard() {
-  const [uploadedFiles, setUploadedFiles] = useState([]);
-  const [messages, setMessages] = useState([]);
+  // ── State ─────────────────────────────────────────────────────────────────
+  const [uploadedFiles, setUploadedFiles]   = useState([]);
+  const [messages, setMessages]             = useState([]);
   const [activeDocumentId, setActiveDocumentId] = useState(null);
-  const [query, setQuery] = useState("");
-  const [activeTab, setActiveTab] = useState("Answer");
+  const [query, setQuery]                   = useState("");
+  const [activeTab, setActiveTab]           = useState("Answer");
   const [sidebarCollapsed, setSidebarCollapsed] = useState(false);
   const [mobileSidebarOpen, setMobileSidebarOpen] = useState(false);
-  const [uploading, setUploading] = useState(false);
+  const [uploading, setUploading]           = useState(false);
   const [uploadProgress, setUploadProgress] = useState(0);
-  const [processingDoc, setProcessingDoc] = useState(null);
-  const [rebuilding, setRebuilding] = useState(false);
-  const [querying, setQuerying] = useState(false);
-  const [clearing, setClearing] = useState(false);
-  const [error, setError] = useState("");
+  const [processingDoc, setProcessingDoc]   = useState(null);
+  const [rebuilding, setRebuilding]         = useState(false);
+  const [querying, setQuerying]             = useState(false);
+  const [clearing, setClearing]             = useState(false);
+  const [error, setError]                   = useState("");
   const [loadingMessage, setLoadingMessage] = useState("");
-  const [guardWarning, setGuardWarning] = useState(false);
+  const [guardWarning, setGuardWarning]     = useState(false);
   const [retrievalScore, setRetrievalScore] = useState(null);
-  const [statusMessage, setStatusMessage] = useState("");
-  const [statusTone, setStatusTone] = useState("neutral");
-  // increments after each agent response — tells ActionConfirmModal to poll immediately
-  const [queryCount, setQueryCount] = useState(0);
+  const [statusMessage, setStatusMessage]   = useState("");
+  const [statusTone, setStatusTone]         = useState("neutral");
+  const [queryCount, setQueryCount]         = useState(0);
 
-  const answerAnchorRef = useRef(null);
-  const messagesEndRef = useRef(null);
+  // ── Refs ──────────────────────────────────────────────────────────────────
   const loadingTimeoutRef = useRef(null);
-  const loadingSlowRef = useRef(null);
+  const loadingSlowRef    = useRef(null);
 
+  // ── Memos ─────────────────────────────────────────────────────────────────
   const inputDisabled = useMemo(() => uploading || querying, [uploading, querying]);
-  const started = messages.length > 0;
 
   const latestAssistantMessage = useMemo(
     () => [...messages].reverse().find((item) => item.role === "assistant") || null,
     [messages],
   );
 
+  const sortedFiles = useMemo(
+    () => [...uploadedFiles].sort((a, b) => String(b.uploaded_at).localeCompare(String(a.uploaded_at))),
+    [uploadedFiles],
+  );
+
+  // ── Effects ───────────────────────────────────────────────────────────────
   const refreshDocuments = async () => {
     const data = await listDocuments();
     setUploadedFiles(normalizeDocuments(data));
@@ -115,15 +113,7 @@ function Dashboard() {
     return () => { mounted = false; };
   }, []);
 
-  useEffect(() => {
-    messagesEndRef.current?.scrollIntoView({ behavior: "smooth", block: "end" });
-  }, [messages]);
-
-  useEffect(() => {
-    if (!latestAssistantMessage) return;
-    answerAnchorRef.current?.scrollIntoView({ behavior: "smooth", block: "start" });
-  }, [latestAssistantMessage]);
-
+  // ── Handlers ──────────────────────────────────────────────────────────────
   const handleUpload = async (file) => {
     setError("");
     setUploading(true);
@@ -151,6 +141,13 @@ function Dashboard() {
     } finally {
       setTimeout(() => { setUploading(false); setUploadProgress(0); }, 250);
     }
+  };
+
+  const handleIngestUrl = async (url) => {
+    setError("");
+    const result = await ingestUrl(url);
+    await refreshDocuments();
+    return result;
   };
 
   const handleDeleteFile = async (fileId) => {
@@ -197,50 +194,62 @@ function Dashboard() {
 
     setLoadingMessage("Searching documents...");
     loadingTimeoutRef.current = window.setTimeout(() => setLoadingMessage("Generating answer..."), 1200);
-    loadingSlowRef.current   = window.setTimeout(() => setLoadingMessage("Still working... (large response)"), 5000);
+    loadingSlowRef.current    = window.setTimeout(() => setLoadingMessage("Still working... (large response)"), 5000);
 
     try {
       const response = activeDocumentId
         ? await queryRagByDocument(ask, activeDocumentId)
         : await queryApi(ask);
 
-      const status    = String(response?.status || "ok");
-      const guardFired = Boolean(response?.guard_fired);
-      const score      = Number.isFinite(Number(response?.retrieval_score)) ? Number(response.retrieval_score) : null;
-
-      setGuardWarning(guardFired);
-      setRetrievalScore(score);
-
-      if (status === "busy")       { setStatusMessage("System busy - try again in a few seconds"); setStatusTone("warning"); }
-      else if (status === "timeout")    { setStatusMessage("Request took too long - try a shorter query"); setStatusTone("warning"); }
-      else if (status === "no_context") { setStatusMessage("No relevant info found in your documents"); setStatusTone("neutral"); }
-
-      const answer  = String(response?.answer || "").trim();
-      const sources = normalizeSources(response?.sources);
-      const confidence = score ?? confidenceFromSources(answer, sources);
-
-      if (answer) {
+      if (response?.status === "awaiting_approval") {
         setMessages((prev) => [
           ...prev,
           {
             role: "assistant",
-            content: answer,
-            sources,
-            confidence,
-            query: ask,
-            status,
-            guardFired,
-            retrievalScore: score,
-            media_result:      response?.media_result      || null,
-            gmail_results:     response?.gmail_results     || [],
-            calendar_results:  response?.calendar_results  || [],
-            agent_steps:       response?.steps             || [],
-            action_id:         response?.action_id         || null,
+            awaitingApproval: true,
+            threadId: response.thread_id,
+            interruptData: response.interrupt_data,
           },
         ]);
-        setQueryCount((c) => c + 1);
       } else {
-        setError("No response from model.");
+        const status     = String(response?.status || "ok");
+        const guardFired = Boolean(response?.guard_fired);
+        const score      = Number.isFinite(Number(response?.retrieval_score)) ? Number(response.retrieval_score) : null;
+
+        setGuardWarning(guardFired);
+        setRetrievalScore(score);
+
+        if (status === "busy")           { setStatusMessage("System busy - try again in a few seconds"); setStatusTone("warning"); }
+        else if (status === "timeout")   { setStatusMessage("Request took too long - try a shorter query"); setStatusTone("warning"); }
+        else if (status === "no_context"){ setStatusMessage("No relevant info found in your documents"); setStatusTone("neutral"); }
+
+        const answer     = String(response?.answer || "").trim();
+        const sources    = normalizeSources(response?.sources);
+        const confidence = score ?? confidenceFromSources(answer, sources);
+
+        if (answer) {
+          setMessages((prev) => [
+            ...prev,
+            {
+              role: "assistant",
+              content: answer,
+              sources,
+              confidence,
+              query: ask,
+              status,
+              guardFired,
+              retrievalScore: score,
+              media_result:     response?.media_result     || null,
+              gmail_results:    response?.gmail_results    || [],
+              calendar_results: response?.calendar_results || [],
+              agent_steps:      response?.steps            || [],
+              action_id:        response?.action_id        || null,
+            },
+          ]);
+          setQueryCount((c) => c + 1);
+        } else {
+          setError("No response from model.");
+        }
       }
     } catch (err) {
       setError(err?.status === 429 ? "Too many requests - please wait a few seconds" : "Something went wrong. Please try again.");
@@ -252,253 +261,121 @@ function Dashboard() {
     }
   };
 
-  const sortedFiles = useMemo(
-    () => [...uploadedFiles].sort((a, b) => String(b.uploaded_at).localeCompare(String(a.uploaded_at))),
-    [uploadedFiles],
-  );
+  const handleApprovalResolved = (result, messageIndex) => {
+    setMessages((prev) => {
+      const next = [...prev];
+      if (result?.status === "awaiting_approval") {
+        next[messageIndex] = {
+          role: "assistant",
+          awaitingApproval: true,
+          threadId: result.thread_id,
+          interruptData: result.interrupt_data,
+        };
+      } else {
+        const answer  = String(result?.answer || "").trim();
+        const sources = normalizeSources(result?.sources);
+        next[messageIndex] = {
+          role: "assistant",
+          content: answer,
+          sources,
+          confidence: confidenceFromSources(answer, sources),
+          status: "ok",
+          guardFired: false,
+          retrievalScore: null,
+          media_result:     result?.media_result     || null,
+          gmail_results:    result?.gmail_results    || [],
+          calendar_results: result?.calendar_results || [],
+          agent_steps:      result?.steps            || [],
+          action_id:        result?.action_id        || null,
+        };
+      }
+      return next;
+    });
+  };
 
-  const sidebar = (
-    <Sidebar
-      uploadedFiles={sortedFiles}
-      activeDocumentId={activeDocumentId}
-      uploading={uploading}
-      processingDoc={processingDoc}
-      uploadProgress={uploadProgress}
-      onUpload={handleUpload}
-      onSelectDocument={setActiveDocumentId}
-      onDeleteFile={handleDeleteFile}
-      onClearAll={handleClearAll}
-      clearing={clearing}
-      collapsed={sidebarCollapsed}
-      onToggleCollapsed={() => setSidebarCollapsed((c) => !c)}
-    />
-  );
-
-  const history = (
-    <div className="space-y-4">
-      <AnimatePresence>
-        {messages.map((message, index) => {
-          const isUser = message.role === "user";
-          return (
-            <motion.div
-              key={`${message.role}-${index}`}
-              initial={{ opacity: 0, y: 8 }}
-              animate={{ opacity: 1, y: 0 }}
-              exit={{ opacity: 0 }}
-              className={`rounded-2xl border p-4 shadow-sm ${
-                isUser
-                  ? "ml-auto max-w-[70%] border-white/10 bg-slate-800/90"
-                  : "mr-auto max-w-[80%] border-white/10 bg-slate-900/90"
-              }`}
-            >
-              <p className="mb-2 text-xs uppercase tracking-[0.18em] text-slate-400">
-                {isUser ? "You" : "Assistant"}
-              </p>
-
-              {isUser ? (
-                <p className="whitespace-pre-wrap text-sm leading-relaxed text-slate-100">
-                  {message.content}
-                </p>
-              ) : (
-                <>
-                  {/* Agent theatre — sits above the answer */}
-                  {message.agent_steps?.length > 0 && (
-                    <div className="mb-3">
-                      <AgentTheatre agent_steps={message.agent_steps} />
-                    </div>
-                  )}
-                  <MessageBubble message={message} />
-                </>
-              )}
-            </motion.div>
-          );
-        })}
-      </AnimatePresence>
-
-      {querying && (
-        <motion.div
-          initial={{ opacity: 0 }}
-          animate={{ opacity: 1 }}
-          className="mr-auto max-w-[80%] rounded-2xl border border-white/10 bg-slate-900/90 p-4"
-        >
-          <p className="text-xs uppercase tracking-[0.18em] text-slate-400">Assistant</p>
-          <div className="mt-2 flex items-center gap-2 text-sm text-slate-200">
-            <span className="inline-flex items-center gap-1">
-              <span className="h-2 w-2 animate-pulse rounded-full bg-indigo-300/80" />
-              <span className="h-2 w-2 animate-pulse rounded-full bg-indigo-300/50 [animation-delay:150ms]" />
-              <span className="h-2 w-2 animate-pulse rounded-full bg-indigo-300/30 [animation-delay:300ms]" />
-            </span>
-            <span className="text-slate-300">{loadingMessage || "Working on your request..."}</span>
-          </div>
-        </motion.div>
-      )}
-      <div ref={messagesEndRef} />
-    </div>
-  );
-
-  const latestSources        = latestAssistantMessage?.sources       || [];
-  const latestAnswer         = latestAssistantMessage?.content       || "";
-  const latestQuery          = latestAssistantMessage?.query         || "";
-  const latestConfidence     = latestAssistantMessage?.confidence    || 0;
-  const latestAgentSteps     = latestAssistantMessage?.agent_steps   || [];
-  const latestRetrievalScore = latestAssistantMessage?.retrievalScore ?? retrievalScore ?? null;
-  const latestGuardFired     = latestAssistantMessage?.guardFired    ?? guardWarning;
-
-  const rightPanel = (
-    <div className="flex flex-col gap-4">
-      <div className="flex items-center justify-between gap-3">
-        <div className="inline-flex rounded-full border border-white/10 bg-slate-900/70 p-1">
-          {TABS.map((tab) => (
-            <button
-              key={tab}
-              type="button"
-              onClick={() => setActiveTab(tab)}
-              className={`rounded-full px-3 py-1 text-xs font-semibold uppercase tracking-[0.12em] transition ${
-                activeTab === tab ? "bg-indigo-500 text-white" : "text-slate-300 hover:bg-white/10"
-              }`}
-            >
-              {tab}
-            </button>
-          ))}
-        </div>
-
-        <span
-          className={`rounded-full border px-2 py-1 text-xs font-semibold ${
-            latestRetrievalScore === null
-              ? "border-white/15 bg-white/5 text-slate-200"
-              : latestRetrievalScore > 0.6
-              ? "border-emerald-300/30 bg-emerald-400/10 text-emerald-100"
-              : latestRetrievalScore > 0.35
-              ? "border-yellow-300/30 bg-yellow-400/10 text-yellow-100"
-              : "border-rose-300/30 bg-rose-400/10 text-rose-100"
-          }`}
-        >
-          {latestRetrievalScore === null
-            ? `Confidence ${latestConfidence}%`
-            : latestRetrievalScore > 0.6
-            ? "High confidence"
-            : latestRetrievalScore > 0.35
-            ? "Medium confidence"
-            : "Low confidence"}
-        </span>
-      </div>
-
-      <div className="scrollbar-thin flex-1 overflow-y-auto">
-        {activeTab === "Answer" && (
-          <div className="space-y-3">
-            {/* AgentTheatre above the answer panel in the right column */}
-            {latestAgentSteps.length > 0 && (
-              <AgentTheatre agent_steps={latestAgentSteps} />
-            )}
-            <AnswerPanel
-              answer={latestAnswer}
-              query={latestQuery}
-              loading={querying}
-              loadingMessage={loadingMessage}
-              sources={latestSources}
-              guardFired={latestGuardFired}
-              statusMessage={statusMessage}
-              statusTone={statusTone}
-              answerRef={answerAnchorRef}
-            />
-          </div>
-        )}
-
-        {activeTab === "Evidence" && <EvidencePanel sources={latestSources} query={latestQuery} />}
-
-        {activeTab === "Insights" && (
-          <div className="space-y-3">
-            <div className="rounded-2xl border border-white/10 bg-slate-900/70 p-4">
-              <p className="text-xs uppercase tracking-[0.18em] text-slate-400">Session Overview</p>
-              <div className="mt-3 grid grid-cols-1 gap-3 sm:grid-cols-2">
-                <div className="rounded-xl border border-white/10 bg-slate-950/60 p-3">
-                  <p className="text-xs text-slate-400">Questions Asked</p>
-                  <p className="mt-1 text-2xl font-semibold text-slate-100">
-                    {messages.filter((m) => m.role === "user").length}
-                  </p>
-                </div>
-                <div className="rounded-xl border border-white/10 bg-slate-950/60 p-3">
-                  <p className="text-xs text-slate-400">Evidence Cards</p>
-                  <p className="mt-1 text-2xl font-semibold text-slate-100">{latestSources.length}</p>
-                </div>
-              </div>
-            </div>
-
-            <div className="rounded-2xl border border-white/10 bg-slate-900/70 p-4">
-              <p className="text-xs uppercase tracking-[0.18em] text-slate-400">Signals</p>
-              <ul className="mt-3 space-y-2 text-sm text-slate-200">
-                <li className="inline-flex w-full items-center gap-2 rounded-xl border border-white/10 bg-slate-950/60 px-3 py-2">
-                  <HiDocumentText className="text-indigo-300" />
-                  Active documents: {uploadedFiles.length}
-                </li>
-                <li className="inline-flex w-full items-center gap-2 rounded-xl border border-white/10 bg-slate-950/60 px-3 py-2">
-                  <HiCheckBadge className="text-emerald-300" />
-                  Retrieval confidence: {latestConfidence}%
-                </li>
-                <li className="inline-flex w-full items-center gap-2 rounded-xl border border-white/10 bg-slate-950/60 px-3 py-2">
-                  <HiArrowTrendingUp className="text-purple-300" />
-                  Current scope: {activeDocumentId ? "Single document" : "Cross-document"}
-                </li>
-              </ul>
-            </div>
-          </div>
-        )}
-      </div>
-    </div>
-  );
-
+  // ── Render ────────────────────────────────────────────────────────────────
   return (
-    <div className="relative min-h-screen bg-[#0f172a] text-slate-100">
-      {/* Action confirmation modal — rendered at root so it overlays everything */}
+    <div style={{
+      background: "#000000",
+      minHeight: "100vh",
+      color: "#ffffff",
+      fontFamily: "'Inter', system-ui, sans-serif",
+    }}>
+      {/* Fixed overlays */}
+      <TopBar />
       <ActionConfirmModal trigger={queryCount} />
-
       <VoiceBar
         onTranscript={handleSend}
         answerToSpeak={latestAssistantMessage?.content}
       />
 
-      <div className="mx-auto max-w-[1400px] p-4 md:p-6">
-        <BriefingBanner />
-        <StatusBanner rebuilding={rebuilding} processingDoc={processingDoc} />
+      {/* Root layout below TopBar */}
+      <div style={{
+        paddingTop: "64px",
+        display: "flex",
+        height: "100vh",
+        overflow: "hidden",
+      }}>
 
-        {error && (
-          <motion.div
-            initial={{ opacity: 0, y: -8 }}
-            animate={{ opacity: 1, y: 0 }}
-            className="mb-4 rounded-2xl border border-rose-300/35 bg-rose-500/10 px-4 py-3 text-sm text-rose-100 shadow-[0_0_20px_rgba(244,63,94,0.15)]"
-          >
-            {error}
-          </motion.div>
-        )}
+        {/* ── Sidebar ─────────────────────────────────────────────────── */}
+        <div style={{ width: "260px", flexShrink: 0, height: "100%" }}>
+          <Sidebar
+            uploadedFiles={sortedFiles}
+            activeDocumentId={activeDocumentId}
+            uploading={uploading}
+            processingDoc={processingDoc}
+            uploadProgress={uploadProgress}
+            onUpload={handleUpload}
+            onIngestUrl={handleIngestUrl}
+            onSelectDocument={setActiveDocumentId}
+            onDeleteFile={handleDeleteFile}
+            onClearAll={handleClearAll}
+            clearing={clearing}
+            collapsed={sidebarCollapsed}
+            onToggleCollapsed={() => setSidebarCollapsed((c) => !c)}
+          />
+        </div>
 
-        {!uploadedFiles.length && !started && (
-          <motion.div
-            initial={{ opacity: 0, y: -8 }}
-            animate={{ opacity: 1, y: 0 }}
-            className="mb-4 rounded-2xl border border-white/10 bg-slate-900/70 px-4 py-3 text-sm text-slate-200"
-          >
-            No documents uploaded yet
-            <br />
-            Upload a PDF to get started
-          </motion.div>
-        )}
+        {/* ── Main area ───────────────────────────────────────────────── */}
+        <div style={{
+          flex: 1,
+          display: "flex",
+          flexDirection: "column",
+          overflow: "hidden",
+          minWidth: 0,
+        }}>
+          <BriefingBanner />
 
-        <ChatLayout
-          started={started}
-          query={query}
-          onChangeQuery={setQuery}
-          onSubmit={() => handleSend(query)}
-          disabled={inputDisabled}
-          loading={querying}
-          canSubmit={uploadedFiles.length > 0}
-          sidebar={sidebar}
-          sidebarCollapsed={sidebarCollapsed}
-          mobileSidebarOpen={mobileSidebarOpen}
-          onOpenMobileSidebar={() => setMobileSidebarOpen(true)}
-          onCloseMobileSidebar={() => setMobileSidebarOpen(false)}
-          history={history}
-          rightPanel={rightPanel}
-        />
+          {error && (
+            <motion.div
+              initial={{ opacity: 0, y: -6 }}
+              animate={{ opacity: 1, y: 0 }}
+              style={{
+                margin: "8px 16px 0",
+                padding: "10px 16px",
+                borderRadius: "8px",
+                background: "#1a0808",
+                border: "1px solid #5a1a1a",
+                color: "#f87171",
+                fontSize: "13px",
+                flexShrink: 0,
+              }}
+            >
+              {error}
+            </motion.div>
+          )}
+
+          <ChatArea
+            messages={messages}
+            query={query}
+            onQueryChange={setQuery}
+            onSend={handleSend}
+            querying={querying}
+            inputDisabled={inputDisabled}
+            loadingMessage={loadingMessage}
+            onApprovalResolved={handleApprovalResolved}
+          />
+        </div>
       </div>
     </div>
   );

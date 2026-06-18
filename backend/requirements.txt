@@ -17,3 +17,5 @@ google-auth-oauthlib>=1.2.0
 google-auth-httplib2>=0.2.0
 google-api-python-client>=2.126.0
 apscheduler>=3.10.0
+PyGithub>=2.3.0
+psutil>=6.0.0

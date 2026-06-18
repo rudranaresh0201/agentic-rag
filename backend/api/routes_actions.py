@@ -8,6 +8,7 @@ from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel
 
 from backend.mcp.google_tools import send_email, create_calendar_event
+from backend.agent.github_agent import create_pull_request
 
 # In-memory store — survives for the lifetime of the server process
 _store: dict[str, dict[str, Any]] = {}
@@ -52,16 +53,25 @@ def list_pending() -> dict:
     return {"actions": [v for v in _store.values() if v["status"] == "pending"]}
 
 
+class ConfirmRequest(BaseModel):
+    payload: dict[str, Any] | None = None
+
+
 @router.post("/confirm/{action_id}")
-def confirm_action(action_id: str) -> dict:
-    """Execute a pending action and mark it done."""
+def confirm_action(action_id: str, body: ConfirmRequest | None = None) -> dict:
+    """Execute a pending action and mark it done.
+
+    Optional body: {"payload": {...}} — if supplied, the edited payload from the
+    ApprovalCard is used instead of the originally stored one, so field edits made
+    by the user before clicking Confirm are honoured.
+    """
     action = _store.get(action_id)
     if not action:
         raise HTTPException(status_code=404, detail="Action not found")
     if action["status"] != "pending":
         raise HTTPException(status_code=409, detail=f"Action already {action['status']}")
 
-    payload = action["payload"]
+    payload = (body and body.payload) or action["payload"]
     try:
         if action["type"] == "send_email":
             result = send_email(
@@ -76,6 +86,14 @@ def confirm_action(action_id: str) -> dict:
                 end_datetime=payload.get("end_datetime", ""),
                 description=payload.get("description", ""),
                 attendees=payload.get("attendees") or [],
+            )
+        elif action["type"] == "create_pr":
+            result = create_pull_request(
+                repo=payload.get("repo", ""),
+                title=payload.get("title", ""),
+                body=payload.get("body", ""),
+                head=payload.get("head", ""),
+                base=payload.get("base", "main"),
             )
         else:
             raise HTTPException(status_code=422, detail=f"Unknown action type: {action['type']}")

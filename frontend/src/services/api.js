@@ -83,49 +83,78 @@ export async function uploadPdf(file, onUploadProgress) {
   }
 }
 
-export async function queryApi(query) {
+function parseAgentResponse(data) {
+  if (data.status === "awaiting_approval") {
+    return {
+      status: "awaiting_approval",
+      thread_id: data.thread_id,
+      interrupt_data: data.interrupt_data,
+    };
+  }
+  return {
+    answer: data.answer,
+    status: "ok",
+    thread_id: data.thread_id,
+    guard_fired: false,
+    retrieval_score: null,
+    sources: [
+      ...(data.rag_sources || []).filter(Boolean).map((s, i) => ({
+        id: i + 1,
+        text: `Retrieved from internal document`,
+        document: s,
+        page: 1,
+        type: "doc"
+      })),
+      ...(data.web_sources || []).filter(Boolean).map((s, i) => ({
+        id: (data.rag_sources || []).length + i + 1,
+        text: `Retrieved from web`,
+        document: s,
+        page: 1,
+        type: "web"
+      })),
+    ],
+    route: data.route,
+    steps: data.steps || [],
+    media_result: data.media_result || null,
+    gmail_results: data.gmail_results || [],
+    calendar_results: data.calendar_results || [],
+    action_id: data.action_id || null,
+  };
+}
+
+export async function queryApi(query, threadId = null) {
   try {
     const res = await apiFetch(`${API_BASE}/agent/query`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ query }),
+      body: JSON.stringify({ query, thread_id: threadId }),
     });
     if (res.status === 429) throw buildStatusError(429, "Too many requests");
     if (!res.ok) {
       const text = await res.text();
       throw new Error(`API error: ${res.status} ${text}`);
     }
-    const data = await res.json();
-    return {
-      answer: data.answer,
-      status: "ok",
-      guard_fired: false,
-      retrieval_score: null,
-      sources: [
-        ...data.rag_sources.filter(Boolean).map((s, i) => ({
-          id: i + 1,
-          text: `Retrieved from internal document`,
-          document: s,
-          page: 1,
-          type: "doc"
-        })),
-        ...data.web_sources.filter(Boolean).map((s, i) => ({
-          id: data.rag_sources.length + i + 1,
-          text: `Retrieved from web`,
-          document: s,
-          page: 1,
-          type: "web"
-        })),
-      ],
-      route: data.route,
-      steps: data.steps || [],
-      media_result: data.media_result || null,
-      gmail_results: data.gmail_results || [],
-      calendar_results: data.calendar_results || [],
-      action_id: data.action_id || null,
-    };
+    return parseAgentResponse(await res.json());
   } catch (error) {
     throw buildApiError(error, "Model is loading, please wait...");
+  }
+}
+
+export async function resumeAgent(threadId, approved, editedPayload = null) {
+  try {
+    const res = await apiFetch(`${API_BASE}/agent/resume`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ thread_id: threadId, approved, edited_payload: editedPayload }),
+    });
+    if (res.status === 429) throw buildStatusError(429, "Too many requests");
+    if (!res.ok) {
+      const text = await res.text();
+      throw new Error(`API error: ${res.status} ${text}`);
+    }
+    return parseAgentResponse(await res.json());
+  } catch (error) {
+    throw buildApiError(error, "Failed to resume agent.");
   }
 }
 
@@ -290,8 +319,13 @@ export async function getPendingActions() {
   }
 }
 
-export async function confirmAction(actionId) {
-  const res = await apiFetch(`${API_BASE}/actions/confirm/${actionId}`, { method: "POST" });
+export async function confirmAction(actionId, editedPayload = null) {
+  const opts = { method: "POST" };
+  if (editedPayload) {
+    opts.headers = { "Content-Type": "application/json" };
+    opts.body = JSON.stringify({ payload: editedPayload });
+  }
+  const res = await apiFetch(`${API_BASE}/actions/confirm/${actionId}`, opts);
   if (!res.ok) {
     const d = await res.json().catch(() => ({}));
     throw new Error(d.detail || `Error ${res.status}`);
@@ -303,4 +337,34 @@ export async function cancelAction(actionId) {
   const res = await apiFetch(`${API_BASE}/actions/cancel/${actionId}`, { method: "POST" });
   if (!res.ok) throw new Error(`Error ${res.status}`);
   return res.json();
+}
+
+export async function ingestUrl(url) {
+  try {
+    const res = await apiFetch(`${API_BASE}/ingest-url`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ url }),
+    });
+    if (!res.ok) {
+      const text = await res.text();
+      throw new Error(`API error: ${res.status} ${text}`);
+    }
+    return await res.json();
+  } catch (error) {
+    throw buildApiError(error, "Failed to ingest URL.");
+  }
+}
+
+export async function listUrlDocuments() {
+  try {
+    const res = await apiFetch(`${API_BASE}/ingest-url/list`);
+    if (!res.ok) {
+      const text = await res.text();
+      throw new Error(`API error: ${res.status} ${text}`);
+    }
+    return await res.json();
+  } catch (error) {
+    throw buildApiError(error, "Failed to load URL documents.");
+  }
 }

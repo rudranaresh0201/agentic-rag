@@ -1,16 +1,22 @@
-@import url("https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&display=swap");
+@import url("https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700;800&display=swap");
 
 @tailwind base;
 @tailwind components;
 @tailwind utilities;
 
 :root {
-  --bg-main: #0f172a;
-  --bg-panel: #020617;
-  --text-main: #e2e8f0;
-  --text-muted: #94a3b8;
-  --accent: #4f46e5;
-  --accent-2: #a855f7;
+  --bg-primary: #0a0a0a;
+  --bg-card: #111111;
+  --bg-elevated: #1a1a1a;
+  --border: #2a2a2a;
+  --accent: #f5c518;
+  --accent-dim: #f5c51820;
+  --text-primary: #ffffff;
+  --text-secondary: #888888;
+  --glass: rgba(255,255,255,0.05);
+  --glass-border: rgba(255,255,255,0.08);
+  --glass-strong: rgba(255,255,255,0.08);
+  --glow: 0 0 30px rgba(245,197,24,0.15);
 }
 
 * {
@@ -27,54 +33,136 @@ body,
 body {
   margin: 0;
   font-family: "Inter", system-ui, -apple-system, "Segoe UI", sans-serif;
-  background: var(--bg-main);
-  color: var(--text-main);
+  background: linear-gradient(135deg, #060612 0%, #0a0a1f 40%, #06080f 100%);
+  color: var(--text-primary);
 }
 
-.glass-card {
-  background: rgba(2, 6, 23, 0.7);
-  border: 1px solid rgba(255, 255, 255, 0.08);
-  box-shadow: 0 16px 38px rgba(2, 6, 23, 0.35);
-  backdrop-filter: blur(16px);
+::selection {
+  background: var(--accent);
+  color: #000000;
 }
 
-.scrollbar-thin {
+/* Scrollbar */
+* {
   scrollbar-width: thin;
-  scrollbar-color: #475569 transparent;
+  scrollbar-color: var(--accent) transparent;
 }
 
-.scrollbar-thin::-webkit-scrollbar {
-  width: 6px;
+::-webkit-scrollbar {
+  width: 4px;
+  height: 4px;
 }
 
-.scrollbar-thin::-webkit-scrollbar-track {
+::-webkit-scrollbar-track {
   background: transparent;
 }
 
-.scrollbar-thin::-webkit-scrollbar-thumb {
-  background: #475569;
-  border-radius: 999px;
+::-webkit-scrollbar-thumb {
+  background: var(--accent);
+  border-radius: 2px;
 }
 
-.hero-title {
-  letter-spacing: -0.02em;
+::-webkit-scrollbar-thumb:hover {
+  background: #e0b214;
+}
+
+/* Legacy class still used by some components */
+.scrollbar-thin {
+  scrollbar-width: thin;
+  scrollbar-color: var(--accent) transparent;
 }
 
 .type-caret {
   display: inline-block;
   width: 0.6ch;
   margin-left: 0.08rem;
-  border-right: 2px solid rgba(191, 219, 254, 0.95);
+  border-right: 2px solid var(--accent);
   animation: blink-caret 0.9s step-end infinite;
 }
 
 @keyframes blink-caret {
-  from,
-  to {
-    opacity: 1;
-  }
+  from, to { opacity: 1; }
+  50%       { opacity: 0; }
+}
 
-  50% {
-    opacity: 0;
+@keyframes pulse-glow {
+  0%, 100% { box-shadow: 0 0 8px rgba(245,197,24,0.4); }
+  50%       { box-shadow: 0 0 20px rgba(245,197,24,0.8); }
+}
+
+@keyframes float {
+  0%, 100% { transform: translateY(0); }
+  50%       { transform: translateY(-4px); }
+}
+
+.glass {
+  background: var(--glass);
+  backdrop-filter: blur(20px);
+  -webkit-backdrop-filter: blur(20px);
+  border: 1px solid var(--glass-border);
+  border-radius: 16px;
+}
+
+.glass-strong {
+  background: var(--glass-strong);
+  backdrop-filter: blur(30px);
+  -webkit-backdrop-filter: blur(30px);
+  border: 1px solid rgba(255,255,255,0.12);
+  border-radius: 16px;
+}
+
+.glow-yellow {
+  box-shadow: var(--glow);
+}
+
+.pulse-glow {
+  animation: pulse-glow 2s ease-in-out infinite;
+}
+
+/* ── v0 / glassmorphism-ai-dashboard utilities ──────────────────────────── */
+
+@keyframes aria-pulse {
+  0%, 100% {
+    opacity: 1;
+    box-shadow: 0 0 0 0 rgba(245, 197, 24, 0.6);
   }
+  50% {
+    opacity: 0.6;
+    box-shadow: 0 0 0 6px rgba(245, 197, 24, 0);
+  }
+}
+
+.animate-aria-pulse {
+  animation: aria-pulse 1.8s ease-in-out infinite;
+}
+
+@keyframes fade-up {
+  from { opacity: 0; transform: translateY(8px); }
+  to   { opacity: 1; transform: translateY(0); }
+}
+
+.animate-fade-up {
+  animation: fade-up 0.35s ease-out both;
+}
+
+.glass-float {
+  box-shadow: 0 8px 32px rgba(0, 0, 0, 0.6);
+}
+
+@keyframes spin {
+  to { transform: rotate(360deg); }
+}
+
+/* Central yellow ambient glow */
+body::after {
+  content: "";
+  position: fixed;
+  inset: 0;
+  z-index: -1;
+  pointer-events: none;
+  background-image: radial-gradient(
+    circle 800px at 50% 42%,
+    rgba(245, 197, 24, 0.08),
+    transparent 70%
+  );
 }
