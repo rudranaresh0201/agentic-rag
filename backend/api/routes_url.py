@@ -5,7 +5,7 @@ import uuid
 from datetime import datetime, timezone
 from urllib.parse import urlparse
 
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel
 
 from ..config import RAG_CHUNK_SIZE, RAG_CHUNK_OVERLAP
@@ -13,6 +13,8 @@ from ..db import embed_texts, get_collection
 from ..retrieval import warmup_bm25_index
 from ..utils import chunk_text, clean_text
 from ..core.logging import get_logger
+from ..auth.jwt_utils import get_current_user
+from ..db.models import User
 
 logger = get_logger(__name__)
 
@@ -24,7 +26,7 @@ class UrlIngestRequest(BaseModel):
 
 
 @router.post("")
-def ingest_url(req: UrlIngestRequest):
+def ingest_url(req: UrlIngestRequest, current_user: User = Depends(get_current_user)):
     import requests
     from bs4 import BeautifulSoup
 
@@ -53,7 +55,7 @@ def ingest_url(req: UrlIngestRequest):
     filename = (f"{domain} - {title}" if title else domain)[:200]
     doc_id = hashlib.sha256(url.encode()).hexdigest()[:16]
 
-    collection = get_collection()
+    collection = get_collection(str(current_user.id))
     existing = collection.get(where={"doc_id": doc_id})
     if existing.get("ids"):
         return {
@@ -88,7 +90,7 @@ def ingest_url(req: UrlIngestRequest):
     collection.add(ids=ids, documents=chunks, metadatas=metadatas, embeddings=embeddings)
 
     try:
-        warmup_bm25_index()
+        warmup_bm25_index(str(current_user.id))
     except Exception as exc:
         logger.warning("[URL-INGEST] BM25 warmup failed: %s", exc)
 
@@ -97,8 +99,8 @@ def ingest_url(req: UrlIngestRequest):
 
 
 @router.get("/list")
-def list_url_documents():
-    collection = get_collection()
+def list_url_documents(current_user: User = Depends(get_current_user)):
+    collection = get_collection(str(current_user.id))
     data = collection.get(where={"url_source": "true"})
     metadatas = data.get("metadatas") or []
     seen: set[str] = set()

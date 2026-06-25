@@ -9,10 +9,29 @@ GITHUB_TOKEN = os.getenv("GITHUB_TOKEN", "")
 GITHUB_USERNAME = os.getenv("GITHUB_USERNAME", "")
 
 
-def _client() -> Github:
-    if not GITHUB_TOKEN:
-        raise RuntimeError("GITHUB_TOKEN not configured")
-    return Github(GITHUB_TOKEN)
+def _client(token: str | None = None) -> Github:
+    t = token or GITHUB_TOKEN
+    if not t:
+        raise RuntimeError("GitHub token not configured")
+    return Github(t)
+
+
+def _get_user_token(user_id: str) -> str | None:
+    """Look up the user's personal GitHub token from the DB."""
+    if not user_id:
+        return None
+    try:
+        import uuid as _uuid
+        from backend.db.postgres import get_db
+        from backend.db.models import User
+        db = next(get_db())
+        try:
+            user = db.query(User).filter(User.id == _uuid.UUID(user_id)).first()
+            return user.github_token if user else None
+        finally:
+            db.close()
+    except Exception:
+        return None
 
 
 def get_recent_commits(username: str, days: int = 7) -> list[dict]:
@@ -36,6 +55,24 @@ def get_recent_commits(username: str, days: int = 7) -> list[dict]:
                     return results
         except GithubException:
             continue
+    return results
+
+
+def get_repo_commits(repo: str, days: int = 7) -> list[dict]:
+    g = _client()
+    repository = g.get_repo(repo)
+    since = datetime.now(timezone.utc) - timedelta(days=days)
+    results: list[dict] = []
+    for commit in repository.get_commits(since=since):
+        results.append({
+            "repo": repo,
+            "sha": commit.sha[:7],
+            "message": commit.commit.message.split("\n")[0],
+            "date": commit.commit.author.date.isoformat(),
+            "url": commit.html_url,
+        })
+        if len(results) >= 20:
+            break
     return results
 
 
@@ -72,11 +109,42 @@ def get_issues(repo: str) -> list[dict]:
     ]
 
 
-def create_pull_request(repo: str, title: str, body: str, head: str, base: str = "main") -> dict:
-    g = _client()
+def create_pull_request(repo: str, title: str, body: str, head: str, base: str = "main", user_id: str = "") -> dict:
+    g = _client(_get_user_token(user_id))
     repository = g.get_repo(repo)
     pr = repository.create_pull(title=title, body=body, head=head, base=base)
     return {"success": True, "pr_url": pr.html_url, "pr_number": pr.number}
+
+
+def commit_files_to_branch(
+    repo: str,
+    branch: str,
+    base: str,
+    files: list[dict],
+    commit_message: str,
+    user_id: str = "",
+) -> dict:
+    """Create branch from base and commit each file. Called only after HITL confirmation."""
+    g = _client(_get_user_token(user_id))
+    repository = g.get_repo(repo)
+    try:
+        base_sha = repository.get_branch(base).commit.sha
+    except GithubException:
+        base = repository.default_branch
+        base_sha = repository.get_branch(base).commit.sha
+    repository.create_git_ref(ref=f"refs/heads/{branch}", sha=base_sha)
+    committed: list[str] = []
+    for f in files:
+        path: str = f["path"]
+        content: str = f["content"]
+        try:
+            existing = repository.get_contents(path, ref=branch)
+            repository.update_file(path, commit_message, content, existing.sha, branch=branch)
+        except Exception:
+            repository.create_file(path, commit_message, content, branch=branch)
+        committed.append(path)
+    branch_url = f"https://github.com/{repo}/tree/{branch}"
+    return {"success": True, "branch": branch, "files_committed": committed, "branch_url": branch_url}
 
 
 def get_user_activity(username: str) -> list[dict]:

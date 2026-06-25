@@ -5,20 +5,22 @@ import threading
 import uuid
 from pathlib import Path
 
-from fastapi import APIRouter, File, HTTPException, UploadFile
+from fastapi import APIRouter, Depends, File, HTTPException, UploadFile
 
 from ..config import get_max_upload_bytes
 from ..db import delete_document, get_all_records, get_s3_key_for_document
 from ..storage import delete_pdf_from_r2
 from ..services.ingestion_service import run_ingest_task
 from ..tasks import create_task, get_task_status
+from ..auth.jwt_utils import get_current_user
+from ..db.models import User
 
 router = APIRouter()
 
 
 @router.get("/documents")
-def list_documents():
-    data = get_all_records()
+def list_documents(current_user: User = Depends(get_current_user)):
+    data = get_all_records(str(current_user.id))
     metadatas = data.get("metadatas") or []
     seen: set[str] = set()
     documents = []
@@ -40,7 +42,7 @@ def list_documents():
 
 
 @router.post("/upload")
-async def upload_document(file: UploadFile = File(...)):
+async def upload_document(file: UploadFile = File(...), current_user: User = Depends(get_current_user)):
     if not file.filename or not file.filename.lower().endswith(".pdf"):
         raise HTTPException(status_code=400, detail="Only PDF files are accepted.")
 
@@ -62,7 +64,7 @@ async def upload_document(file: UploadFile = File(...)):
 
     threading.Thread(
         target=run_ingest_task,
-        args=(task_id, save_path, safe_name, len(pdf_bytes)),
+        args=(task_id, save_path, safe_name, len(pdf_bytes), str(current_user.id)),
         daemon=True,
     ).start()
 
@@ -78,12 +80,12 @@ def get_task(task_id: str):
 
 
 @router.delete("/documents/{doc_id}")
-def delete_doc(doc_id: str):
+def delete_doc(doc_id: str, current_user: User = Depends(get_current_user)):
     # Retrieve s3_key BEFORE deleting chunks (metadata goes with chunks)
-    s3_key = get_s3_key_for_document(doc_id)
+    s3_key = get_s3_key_for_document(str(current_user.id), doc_id)
 
     # Delete chunks from ChromaDB
-    delete_document(doc_id)
+    delete_document(str(current_user.id), doc_id)
 
     # Delete raw PDF from R2 (non-fatal if missing or R2 not configured)
     if s3_key:

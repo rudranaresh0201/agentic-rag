@@ -1,12 +1,14 @@
-from fastapi import APIRouter
+from fastapi import APIRouter, Depends
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel
 import json
 import uuid
 from langgraph.types import Command
-from backend.agent.graph import agent_graph
+from backend.agent.graph import get_agent_graph
 from backend.agent.state import AgentState
 from backend.api.routes_actions import register_action
+from backend.auth.jwt_utils import get_current_user
+from backend.db.models import User
 
 router = APIRouter(prefix="/agent", tags=["agent"])
 
@@ -39,11 +41,13 @@ _EMPTY_STATE_BASE = {
     "email_draft": None,
     "resume_result": None,
     "standup_result": None,
+    "data_result": None,
+    "user_id": None,
 }
 
 
-def _initial_state(query: str) -> AgentState:
-    return {**_EMPTY_STATE_BASE, "query": query}  # type: ignore[return-value]
+def _initial_state(query: str, user_id: str | None = None) -> AgentState:
+    return {**_EMPTY_STATE_BASE, "query": query, "user_id": user_id}  # type: ignore[return-value]
 
 
 def _maybe_register(pending: dict | None) -> str | None:
@@ -97,14 +101,17 @@ def _build_normal_response(result: dict, thread_id: str) -> dict:
         "email_draft": result.get("email_draft"),
         "resume_result": result.get("resume_result"),
         "standup_result": result.get("standup_result"),
+        "code_result": result.get("code_result"),
+        "execution_result": result.get("execution_result"),
+        "data_result": result.get("data_result"),
     }
 
 
 @router.post("/query")
-async def agent_query(req: AgentRequest):
+async def agent_query(req: AgentRequest, current_user: User = Depends(get_current_user)):
     thread_id = req.thread_id or str(uuid.uuid4())
     config = {"configurable": {"thread_id": thread_id}}
-    result = await agent_graph.ainvoke(_initial_state(req.query), config=config)
+    result = await get_agent_graph().ainvoke(_initial_state(req.query, user_id=str(current_user.id)), config=config)
     print(f"[agent_query] result keys: {list(result.keys())}, has_interrupt: {'__interrupt__' in result}, thread_id: {thread_id}")
 
     if "__interrupt__" in result:
@@ -121,9 +128,9 @@ async def agent_query(req: AgentRequest):
 
 
 @router.post("/resume")
-async def agent_resume(req: ResumeRequest):
+async def agent_resume(req: ResumeRequest, current_user: User = Depends(get_current_user)):
     config = {"configurable": {"thread_id": req.thread_id}}
-    result = await agent_graph.ainvoke(
+    result = await get_agent_graph().ainvoke(
         Command(resume={"approved": req.approved, "payload": req.edited_payload}),
         config=config,
     )
@@ -141,13 +148,13 @@ async def agent_resume(req: ResumeRequest):
 
 
 @router.post("/query/stream")
-async def agent_query_stream(req: AgentRequest):
+async def agent_query_stream(req: AgentRequest, current_user: User = Depends(get_current_user)):
     thread_id = req.thread_id or str(uuid.uuid4())
     config = {"configurable": {"thread_id": thread_id}}
     _STREAM_NODES = {"router", "rag", "web", "gmail", "calendar", "media", "synthesis", "clarify"}
 
     async def event_generator():
-        async for event in agent_graph.astream_events(_initial_state(req.query), config=config, version="v2"):
+        async for event in get_agent_graph().astream_events(_initial_state(req.query, user_id=str(current_user.id)), config=config, version="v2"):
             kind = event["event"]
             if kind == "on_chain_start" and event.get("name") in _STREAM_NODES:
                 yield f"data: {json.dumps({'type':'step','node':event['name']})}\n\n"

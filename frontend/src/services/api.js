@@ -1,14 +1,20 @@
 export const API_BASE = import.meta.env.VITE_API_URL || "http://127.0.0.1:8003";
 
 const API_HEADERS = {
-  "X-API-Key": "12345",
+  "X-API-Key": "mysecretkey123",
 };
 
+export function getAuthToken() {
+  return localStorage.getItem("aria_token");
+}
+
 async function apiFetch(url, options = {}) {
+  const token = getAuthToken();
   return fetch(url, {
     ...options,
     headers: {
       ...API_HEADERS,
+      ...(token ? { Authorization: `Bearer ${token}` } : {}),
       ...(options.headers || {}),
     },
   });
@@ -119,6 +125,13 @@ function parseAgentResponse(data) {
     gmail_results: data.gmail_results || [],
     calendar_results: data.calendar_results || [],
     action_id: data.action_id || null,
+    code_result: data.code_result || null,
+    execution_result: data.execution_result || null,
+    social_post: data.social_post || null,
+    email_draft: data.email_draft || null,
+    resume_result: data.resume_result || null,
+    standup_result: data.standup_result || null,
+    data_result: data.data_result || null,
   };
 }
 
@@ -328,13 +341,62 @@ export async function confirmAction(actionId, editedPayload = null) {
   const res = await apiFetch(`${API_BASE}/actions/confirm/${actionId}`, opts);
   if (!res.ok) {
     const d = await res.json().catch(() => ({}));
-    throw new Error(d.detail || `Error ${res.status}`);
+    // Preserve structured detail (e.g. {stage, reason} from code_diff_preview) on the
+    // thrown error so callers can render stage-specific messages rather than "[object Object]".
+    const message = typeof d.detail === "string" ? d.detail : `Error ${res.status}`;
+    const err = new Error(message);
+    err.detail = d.detail ?? null;
+    throw err;
   }
   return res.json();
 }
 
 export async function cancelAction(actionId) {
   const res = await apiFetch(`${API_BASE}/actions/cancel/${actionId}`, { method: "POST" });
+  if (!res.ok) throw new Error(`Error ${res.status}`);
+  return res.json();
+}
+
+// ── Chat history ──────────────────────────────────────────────────────────────
+
+export async function createChatSession(title = null) {
+  const res = await apiFetch(`${API_BASE}/history/sessions`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ title }),
+  });
+  if (!res.ok) return null;
+  return res.json();
+}
+
+export async function listChatSessions() {
+  try {
+    const res = await apiFetch(`${API_BASE}/history/sessions`);
+    if (!res.ok) return [];
+    return res.json();
+  } catch { return []; }
+}
+
+export async function getChatSession(sessionId) {
+  try {
+    const res = await apiFetch(`${API_BASE}/history/sessions/${sessionId}`);
+    if (!res.ok) return null;
+    return res.json();
+  } catch { return null; }
+}
+
+export async function saveMessage(sessionId, role, content, metadata = {}) {
+  try {
+    await apiFetch(`${API_BASE}/history/sessions/${sessionId}/messages`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ role, content, metadata }),
+    });
+  } catch { /* non-fatal */ }
+}
+
+export async function deleteChatSession(sessionId) {
+  const res = await apiFetch(`${API_BASE}/history/sessions/${sessionId}`, { method: "DELETE" });
   if (!res.ok) throw new Error(`Error ${res.status}`);
   return res.json();
 }

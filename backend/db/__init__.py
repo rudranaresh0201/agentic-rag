@@ -11,9 +11,9 @@ from chromadb.api.models.Collection import Collection
 from chromadb.config import Settings
 from sentence_transformers import SentenceTransformer
 
-from .core.logging import get_logger
+from ..core.logging import get_logger
 
-BASE_DIR = Path(__file__).resolve().parent
+BASE_DIR = Path(__file__).resolve().parent.parent
 _chroma_path_env = os.getenv("CHROMA_PATH", "").strip()
 if _chroma_path_env:
     # Resolve relative paths from BASE_DIR so the location is server-start-directory-agnostic
@@ -23,17 +23,21 @@ if _chroma_path_env:
     CHROMA_PATH = str(_chroma_path_candidate.resolve())
 else:
     CHROMA_PATH = str((BASE_DIR / "chroma_db").resolve())
-COLLECTION_NAME = "rag_documents"
+_COLLECTION_PREFIX = "rag_documents"
 EMBEDDING_MODEL_NAME = os.getenv("EMBEDDING_MODEL", "BAAI/bge-base-en-v1.5")
 
 _client = None
 _embedder: SentenceTransformer | None = None
-_collection_verified = False
+_collections_verified: set[str] = set()
 _client_lock = threading.Lock()
 _embedder_lock = threading.Lock()
 _collection_verify_lock = threading.Lock()
 
 logger = get_logger(__name__)
+
+
+def _coll_name(user_id: str) -> str:
+    return f"{_COLLECTION_PREFIX}_{user_id}"
 
 
 def get_client():
@@ -55,8 +59,8 @@ def get_client():
                     anonymized_telemetry=False,
                 ),
             )
-            # Touch collection metadata once to fail fast on corruption.
-            _client.get_or_create_collection(name=COLLECTION_NAME)
+            # Touch the client to fail fast on corruption.
+            _client.list_collections()
         except Exception:
             _client = None
             try:
@@ -71,32 +75,32 @@ def get_client():
                     anonymized_telemetry=False,
                 ),
             )
-            _client.get_or_create_collection(name=COLLECTION_NAME)
+            _client.list_collections()
 
     return _client
 
 
-def get_collection() -> Collection:
-    global _collection_verified
+def get_collection(user_id: str) -> Collection:
     client = get_client()
+    name = _coll_name(user_id)
     collection = client.get_or_create_collection(
-        name=COLLECTION_NAME,
+        name=name,
         metadata={"embedding_model": EMBEDDING_MODEL_NAME},
     )
 
-    if _collection_verified:
+    if user_id in _collections_verified:
         return collection
 
     with _collection_verify_lock:
         # Re-check after acquiring the lock to avoid duplicate migration.
-        if _collection_verified:
+        if user_id in _collections_verified:
             return collection
 
         current_metadata = collection.metadata or {}
         current_model = str(current_metadata.get("embedding_model", "")).strip()
 
         if current_model == EMBEDDING_MODEL_NAME:
-            _collection_verified = True
+            _collections_verified.add(user_id)
             return collection
 
         records = collection.get(include=["documents", "metadatas"])
@@ -105,12 +109,12 @@ def get_collection() -> Collection:
         metadatas = records.get("metadatas") or []
 
         try:
-            client.delete_collection(COLLECTION_NAME)
+            client.delete_collection(name)
         except Exception:
             pass
 
         collection = client.get_or_create_collection(
-            name=COLLECTION_NAME,
+            name=name,
             metadata={"embedding_model": EMBEDDING_MODEL_NAME},
         )
 
@@ -131,7 +135,7 @@ def get_collection() -> Collection:
                 embeddings=migrated_embeddings,
             )
 
-        _collection_verified = True
+        _collections_verified.add(user_id)
     return collection
 
 
@@ -159,21 +163,23 @@ def embed_texts(texts: List[str]) -> List[List[float]]:
 
 
 def add_chunks(
+    user_id: str,
     ids: List[str],
     chunks: List[str],
     metadatas: List[Dict[str, str | int]],
     embeddings: List[List[float]],
 ) -> None:
-    collection = get_collection()
+    collection = get_collection(user_id)
     collection.add(ids=ids, documents=chunks, metadatas=metadatas, embeddings=embeddings)
 
 
 def query_chunks(
+    user_id: str,
     query_embedding: List[float],
     top_k: int,
     document_id: str | None = None,
 ) -> Dict:
-    collection = get_collection()
+    collection = get_collection(user_id)
     where = {"doc_id": document_id} if document_id else None
     return collection.query(
         query_embeddings=[query_embedding],
@@ -183,8 +189,8 @@ def query_chunks(
     )
 
 
-def get_all_records():
-    collection = get_collection()
+def get_all_records(user_id: str):
+    collection = get_collection(user_id)
     try:
         data = collection.get()
         return data
@@ -193,14 +199,14 @@ def get_all_records():
         return {"ids": [], "documents": [], "metadatas": []}
 
 
-def delete_document(document_id: str) -> None:
-    collection = get_collection()
+def delete_document(user_id: str, document_id: str) -> None:
+    collection = get_collection(user_id)
     collection.delete(where={"doc_id": document_id})
 
 
-def get_s3_key_for_document(document_id: str) -> str | None:
+def get_s3_key_for_document(user_id: str, document_id: str) -> str | None:
     """Return the R2 s3_key for a document before deleting it, or None if not found."""
-    collection = get_collection()
+    collection = get_collection(user_id)
     try:
         records = collection.get(
             where={"doc_id": document_id},
@@ -216,15 +222,15 @@ def get_s3_key_for_document(document_id: str) -> str | None:
     return None
 
 
-def reset_database() -> None:
-    global _collection_verified
+def reset_database(user_id: str) -> None:
+    name = _coll_name(user_id)
     client = get_client()
     try:
-        client.delete_collection(COLLECTION_NAME)
+        client.delete_collection(name)
     except Exception:
         pass
     client.get_or_create_collection(
-        name=COLLECTION_NAME,
+        name=name,
         metadata={"embedding_model": EMBEDDING_MODEL_NAME},
     )
-    _collection_verified = False
+    _collections_verified.discard(user_id)

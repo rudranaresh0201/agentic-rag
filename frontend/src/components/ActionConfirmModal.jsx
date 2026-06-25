@@ -5,12 +5,18 @@ import { API_BASE } from "../services/api";
 
 const HEADERS = { "X-API-Key": "12345" };
 
+// Action types that are handled inline by ApprovalCard (in-chat).
+// They must never appear in this floating modal — the same action_id would
+// cause a double-handling race and the modal's confirm path doesn't know
+// how to render or surface their structured errors.
+const INLINE_ONLY_TYPES = new Set(["code_diff_preview"]);
+
 async function fetchActions() {
   try {
     const res = await fetch(`${API_BASE}/actions/pending`, { headers: HEADERS });
     if (!res.ok) return [];
     const data = await res.json();
-    return data.actions || [];
+    return (data.actions || []).filter((a) => !INLINE_ONLY_TYPES.has(a.type));
   } catch {
     return [];
   }
@@ -114,7 +120,15 @@ export default function ActionConfirmModal({ trigger }) {
       });
       if (!res.ok) {
         const d = await res.json().catch(() => ({}));
-        throw new Error(d.detail || `Error ${res.status}`);
+        // detail may be a string or a structured object {stage, reason}.
+        // Coerce to a readable string so we never render "[object Object]".
+        const detail = d.detail;
+        const message =
+          typeof detail === "string" ? detail :
+          detail && typeof detail === "object" && detail.reason
+            ? `${detail.stage ? `[${detail.stage}] ` : ""}${detail.reason}`
+            : `Error ${res.status}`;
+        throw new Error(message);
       }
       setActions((prev) => prev.filter((a) => a.action_id !== action.action_id));
     } catch (e) {

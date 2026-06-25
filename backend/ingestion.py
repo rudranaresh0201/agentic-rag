@@ -80,6 +80,7 @@ def extract_text_from_pdf_path(pdf_path: str) -> str:
 
 
 def ingest_pdf(
+    user_id: str,
     pdf_bytes: bytes,
     filename: str,
     file_size: int,
@@ -135,7 +136,7 @@ def ingest_pdf(
         }
         for index in range(len(chunks))
     ]
-    collection = get_collection()
+    collection = get_collection(user_id)
     collection.add(ids=ids, documents=chunks, metadatas=metadatas, embeddings=embeddings)
     logger.info("CHUNKS STORED: %s", len(chunks))
     logger.info("TOTAL IN DB: %s", collection.count())
@@ -157,6 +158,7 @@ def ingest_pdf(
 
 
 def ingest_pdf_file_path(
+    user_id: str,
     pdf_path: str,
     filename: str,
     file_size: int,
@@ -231,7 +233,7 @@ def ingest_pdf_file_path(
 
     # ---- CHROMADB INSERT ----
     logger.info("[INGEST] Inserting %d chunks into ChromaDB filename=%s doc_id=%s", len(chunks), filename, doc_id)
-    collection = get_collection()
+    collection = get_collection(user_id)
     collection.add(ids=ids, documents=chunks, metadatas=metadatas, embeddings=embeddings)
     total_in_db = collection.count()
     logger.info(

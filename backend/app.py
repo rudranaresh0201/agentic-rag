@@ -26,6 +26,8 @@ from backend.api.routes_actions import router as actions_router
 from backend.api.routes_voice import router as voice_router
 from backend.api.routes_scheduler import router as scheduler_router
 from backend.api.routes_url import router as url_router
+from backend.api.routes_auth import router as auth_router
+from backend.api.routes_history import router as history_router
 from .tasks import load_task_state_on_startup
 
 app = FastAPI(title="PDF RAG Backend", version="2.0.0")
@@ -62,6 +64,26 @@ async def shutdown_scheduler() -> None:
 
 
 @app.on_event("startup")
+async def startup_graph() -> None:
+    try:
+        from backend.agent.graph import init_agent_graph
+        await init_agent_graph()
+        logger.info("[STARTUP] Agent graph with AsyncSqliteSaver ready")
+    except Exception as exc:
+        logger.exception("[ERROR] Agent graph init failed: %s", exc)
+
+
+@app.on_event("startup")
+def startup_postgres() -> None:
+    try:
+        from backend.db.postgres import init_db
+        init_db()
+        logger.info("[STARTUP] PostgreSQL tables ready (or DATABASE_URL not set — skipped)")
+    except Exception as exc:
+        logger.exception("[ERROR] PostgreSQL init failed: %s", exc)
+
+
+@app.on_event("startup")
 def startup_warmup() -> None:
     try:
         load_task_state_on_startup()
@@ -73,8 +95,7 @@ def startup_warmup() -> None:
         logger.info("[STARTUP] Embedding model ready")
 
         def _run_rebuild() -> None:
-            rebuild_from_r2_if_empty()
-            warmup_bm25_index()
+            rebuild_from_r2_if_empty()  # no-op: user_id=None, per-user rebuild requires auth
 
         threading.Thread(target=_run_rebuild, daemon=True).start()
     except Exception as exc:
@@ -91,6 +112,8 @@ app.include_router(actions_router)
 app.include_router(voice_router)
 app.include_router(scheduler_router)
 app.include_router(url_router)
+app.include_router(auth_router)
+app.include_router(history_router)
 
 
 if __name__ == "__main__":

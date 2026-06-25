@@ -1,5 +1,6 @@
 import { motion } from "framer-motion";
 import { useEffect, useMemo, useRef, useState } from "react";
+import { useNavigate } from "react-router-dom";
 import ActionConfirmModal from "../components/ActionConfirmModal";
 import ApprovalCard from "../components/ApprovalCard";
 import BriefingBanner from "../components/BriefingBanner";
@@ -16,6 +17,11 @@ import {
   queryApi,
   resetRag,
   ingestUrl,
+  createChatSession,
+  listChatSessions,
+  getChatSession,
+  saveMessage,
+  deleteChatSession,
 } from "../services/api";
 
 // ── Pure helpers ──────────────────────────────────────────────────────────────
@@ -54,6 +60,8 @@ function confidenceFromSources(answer, sources) {
 
 // ── Dashboard ─────────────────────────────────────────────────────────────────
 function Dashboard() {
+  const navigate = useNavigate();
+
   // ── State ─────────────────────────────────────────────────────────────────
   const [uploadedFiles, setUploadedFiles]   = useState([]);
   const [messages, setMessages]             = useState([]);
@@ -75,10 +83,16 @@ function Dashboard() {
   const [statusMessage, setStatusMessage]   = useState("");
   const [statusTone, setStatusTone]         = useState("neutral");
   const [queryCount, setQueryCount]         = useState(0);
+  const [chatSessions, setChatSessions]     = useState([]);
+  const [activeSessionId, setActiveSessionId] = useState(null);
 
   // ── Refs ──────────────────────────────────────────────────────────────────
   const loadingTimeoutRef = useRef(null);
   const loadingSlowRef    = useRef(null);
+  const activeSessionRef  = useRef(null);
+
+  // Keep ref in sync so handleSend closure always sees latest session id
+  useEffect(() => { activeSessionRef.current = activeSessionId; }, [activeSessionId]);
 
   // ── Memos ─────────────────────────────────────────────────────────────────
   const inputDisabled = useMemo(() => uploading || querying, [uploading, querying]);
@@ -94,6 +108,39 @@ function Dashboard() {
   );
 
   // ── Effects ───────────────────────────────────────────────────────────────
+  useEffect(() => {
+    const params = new URLSearchParams(window.location.search);
+    const token = params.get("token");
+    if (token) {
+      localStorage.setItem("aria_token", token);
+      params.delete("token");
+      const newSearch = params.toString();
+      window.history.replaceState(
+        {},
+        "",
+        window.location.pathname + (newSearch ? `?${newSearch}` : ""),
+      );
+    } else {
+      const stored = localStorage.getItem("aria_token");
+      if (!stored) {
+        navigate("/login", { replace: true });
+        return;
+      }
+      // Decode JWT payload to check expiry (base64url → base64 conversion required)
+      try {
+        const b64 = stored.split(".")[1].replace(/-/g, "+").replace(/_/g, "/");
+        const padded = b64 + "=".repeat((4 - (b64.length % 4)) % 4);
+        const payload = JSON.parse(atob(padded));
+        if (payload.exp && payload.exp * 1000 < Date.now()) {
+          localStorage.removeItem("aria_token");
+          navigate("/login", { replace: true });
+        }
+      } catch {
+        // Decode failed — keep the token, let the backend reject it on the first call
+      }
+    }
+  }, [navigate]);
+
   const refreshDocuments = async () => {
     const data = await listDocuments();
     setUploadedFiles(normalizeDocuments(data));
@@ -103,8 +150,11 @@ function Dashboard() {
     let mounted = true;
     const bootstrap = async () => {
       try {
-        const data = await listDocuments();
-        if (mounted) setUploadedFiles(normalizeDocuments(data));
+        const [docData, sessions] = await Promise.all([listDocuments(), listChatSessions()]);
+        if (mounted) {
+          setUploadedFiles(normalizeDocuments(docData));
+          setChatSessions(sessions || []);
+        }
       } catch {
         if (mounted) setError("Failed to load documents.");
       }
@@ -112,6 +162,32 @@ function Dashboard() {
     bootstrap();
     return () => { mounted = false; };
   }, []);
+
+  const handleLoadSession = async (sessionId) => {
+    const data = await getChatSession(sessionId);
+    if (!data) return;
+    setActiveSessionId(sessionId);
+    setMessages(
+      (data.messages || []).map((m) => ({
+        role: m.role,
+        content: m.content,
+        ...(m.metadata || {}),
+      }))
+    );
+    setQuery("");
+  };
+
+  const handleNewChat = () => {
+    setActiveSessionId(null);
+    setMessages([]);
+    setQuery("");
+  };
+
+  const handleDeleteSession = async (sessionId) => {
+    await deleteChatSession(sessionId);
+    setChatSessions((prev) => prev.filter((s) => s.session_id !== sessionId));
+    if (activeSessionId === sessionId) handleNewChat();
+  };
 
   // ── Handlers ──────────────────────────────────────────────────────────────
   const handleUpload = async (file) => {
@@ -192,6 +268,18 @@ function Dashboard() {
 
     setMessages((prev) => [...prev, { role: "user", content: ask }]);
 
+    // Ensure a session exists; create one lazily on first message
+    let sessionId = activeSessionRef.current;
+    if (!sessionId) {
+      const created = await createChatSession(ask.slice(0, 60));
+      if (created?.session_id) {
+        sessionId = created.session_id;
+        setActiveSessionId(sessionId);
+        setChatSessions((prev) => [{ session_id: sessionId, title: ask.slice(0, 60), created_at: new Date().toISOString(), updated_at: new Date().toISOString() }, ...prev]);
+      }
+    }
+    if (sessionId) saveMessage(sessionId, "user", ask);
+
     setLoadingMessage("Searching documents...");
     loadingTimeoutRef.current = window.setTimeout(() => setLoadingMessage("Generating answer..."), 1200);
     loadingSlowRef.current    = window.setTimeout(() => setLoadingMessage("Still working... (large response)"), 5000);
@@ -228,6 +316,21 @@ function Dashboard() {
         const confidence = score ?? confidenceFromSources(answer, sources);
 
         if (answer) {
+          const assistantMeta = {
+            sources, confidence, query: ask, status, guardFired, retrievalScore: score,
+            media_result: response?.media_result || null,
+            gmail_results: response?.gmail_results || [],
+            calendar_results: response?.calendar_results || [],
+            agent_steps: response?.steps || [],
+            action_id: response?.action_id || null,
+            code_result: response?.code_result || null,
+            execution_result: response?.execution_result || null,
+            social_post: response?.social_post || null,
+            email_draft: response?.email_draft || null,
+            resume_result: response?.resume_result || null,
+            standup_result: response?.standup_result || null,
+          };
+          if (sessionId) saveMessage(sessionId, "assistant", answer, assistantMeta);
           setMessages((prev) => [
             ...prev,
             {
@@ -244,6 +347,13 @@ function Dashboard() {
               calendar_results: response?.calendar_results || [],
               agent_steps:      response?.steps            || [],
               action_id:        response?.action_id        || null,
+              code_result:      response?.code_result      || null,
+              execution_result: response?.execution_result || null,
+              social_post:      response?.social_post      || null,
+              email_draft:      response?.email_draft      || null,
+              resume_result:    response?.resume_result    || null,
+              standup_result:   response?.standup_result   || null,
+              data_result:      response?.data_result      || null,
             },
           ]);
           setQueryCount((c) => c + 1);
@@ -287,6 +397,13 @@ function Dashboard() {
           calendar_results: result?.calendar_results || [],
           agent_steps:      result?.steps            || [],
           action_id:        result?.action_id        || null,
+          code_result:      result?.code_result      || null,
+          execution_result: result?.execution_result || null,
+          social_post:      result?.social_post      || null,
+          email_draft:      result?.email_draft      || null,
+          resume_result:    result?.resume_result    || null,
+          standup_result:   result?.standup_result   || null,
+          data_result:      result?.data_result      || null,
         };
       }
       return next;
@@ -318,7 +435,11 @@ function Dashboard() {
       }}>
 
         {/* ── Sidebar ─────────────────────────────────────────────────── */}
-        <div style={{ width: "260px", flexShrink: 0, height: "100%" }}>
+        <motion.div
+          animate={{ width: sidebarCollapsed ? "56px" : "260px" }}
+          transition={{ type: "spring", stiffness: 280, damping: 30 }}
+          style={{ flexShrink: 0, height: "100%", overflow: "hidden" }}
+        >
           <Sidebar
             uploadedFiles={sortedFiles}
             activeDocumentId={activeDocumentId}
@@ -333,8 +454,13 @@ function Dashboard() {
             clearing={clearing}
             collapsed={sidebarCollapsed}
             onToggleCollapsed={() => setSidebarCollapsed((c) => !c)}
+            chatSessions={chatSessions}
+            activeSessionId={activeSessionId}
+            onNewChat={handleNewChat}
+            onLoadSession={handleLoadSession}
+            onDeleteSession={handleDeleteSession}
           />
-        </div>
+        </motion.div>
 
         {/* ── Main area ───────────────────────────────────────────────── */}
         <div style={{

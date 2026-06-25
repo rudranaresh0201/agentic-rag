@@ -25,6 +25,7 @@ def init_db() -> None:
             conn.execute("""
                 CREATE TABLE IF NOT EXISTS memories (
                     id           INTEGER PRIMARY KEY AUTOINCREMENT,
+                    user_id      TEXT    NOT NULL DEFAULT '',
                     content      TEXT    NOT NULL,
                     embedding_json TEXT  NOT NULL,
                     access_count INTEGER DEFAULT 0,
@@ -33,11 +34,14 @@ def init_db() -> None:
                     decay_score  REAL    DEFAULT 0.0
                 )
             """)
+            # Migrate existing DBs that predate the user_id column
+            cols = {row[1] for row in conn.execute("PRAGMA table_info(memories)")}
+            if "user_id" not in cols:
+                conn.execute("ALTER TABLE memories ADD COLUMN user_id TEXT NOT NULL DEFAULT ''")
             conn.commit()
 
 
 def _embed(text: str) -> list[float]:
-    # Reuse the project's shared embedder (BAAI/bge-base-en-v1.5 by default)
     from backend.db import embed_texts
     return embed_texts([text])[0]
 
@@ -56,16 +60,16 @@ def _decay(access_count: int, created_at: str) -> float:
     return access_count / (days + 1)
 
 
-def add_memory(content: str) -> int:
+def add_memory(content: str, user_id: str = "") -> int:
     init_db()
     embedding = _embed(content)
     now = datetime.now(timezone.utc).isoformat()
     with _db_lock:
         with _get_conn() as conn:
             cursor = conn.execute(
-                """INSERT INTO memories (content, embedding_json, access_count, last_accessed, created_at, decay_score)
-                   VALUES (?, ?, 0, ?, ?, 0.0)""",
-                (content, json.dumps(embedding), now, now),
+                """INSERT INTO memories (user_id, content, embedding_json, access_count, last_accessed, created_at, decay_score)
+                   VALUES (?, ?, ?, 0, ?, ?, 0.0)""",
+                (user_id, content, json.dumps(embedding), now, now),
             )
             conn.commit()
             return cursor.lastrowid
@@ -87,12 +91,17 @@ def update_access(memory_id: int) -> None:
             conn.commit()
 
 
-def search_memories(query: str, top_k: int = 5) -> list[dict]:
+def search_memories(query: str, top_k: int = 5, user_id: str = "") -> list[dict]:
     init_db()
     query_emb = _embed(query)
 
     with _get_conn() as conn:
-        rows = conn.execute("SELECT * FROM memories").fetchall()
+        if user_id:
+            rows = conn.execute(
+                "SELECT * FROM memories WHERE user_id = ? OR user_id = ''", (user_id,)
+            ).fetchall()
+        else:
+            rows = conn.execute("SELECT * FROM memories").fetchall()
 
     if not rows:
         return []
@@ -116,13 +125,18 @@ def search_memories(query: str, top_k: int = 5) -> list[dict]:
     return results
 
 
-def list_memories() -> list[dict]:
+def list_memories(user_id: str = "") -> list[dict]:
     init_db()
-    now_ts = datetime.now(timezone.utc)
     with _get_conn() as conn:
-        rows = conn.execute(
-            "SELECT id, content, access_count, last_accessed, created_at FROM memories"
-        ).fetchall()
+        if user_id:
+            rows = conn.execute(
+                "SELECT id, content, access_count, last_accessed, created_at FROM memories WHERE user_id = ?",
+                (user_id,),
+            ).fetchall()
+        else:
+            rows = conn.execute(
+                "SELECT id, content, access_count, last_accessed, created_at FROM memories"
+            ).fetchall()
     results = []
     for row in rows:
         d = dict(row)
@@ -140,10 +154,15 @@ def delete_memory(memory_id: int) -> bool:
             return cursor.rowcount > 0
 
 
-def prune_memories(min_decay: float = 0.01) -> int:
+def prune_memories(min_decay: float = 0.01, user_id: str = "") -> int:
     init_db()
     with _get_conn() as conn:
-        rows = conn.execute("SELECT id, access_count, created_at FROM memories").fetchall()
+        if user_id:
+            rows = conn.execute(
+                "SELECT id, access_count, created_at FROM memories WHERE user_id = ?", (user_id,)
+            ).fetchall()
+        else:
+            rows = conn.execute("SELECT id, access_count, created_at FROM memories").fetchall()
     ids_to_delete = [
         r["id"] for r in rows if _decay(r["access_count"], r["created_at"]) < min_decay
     ]

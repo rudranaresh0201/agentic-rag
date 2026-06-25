@@ -25,4 +25,9 @@ class AgentState(TypedDict):
     email_draft: Optional[dict]                # {subject, body, to} from email_draft_node
     resume_result: Optional[dict]              # {tailored_bullets, match_score, suggestions} from resume_tailor_node
     standup_result: Optional[dict]             # {yesterday, today, blockers} from standup_node
-    code_result: Optional[dict]                # {language, content} from code_writer_node
+    code_result: Optional[dict]                # {language, content, files, commit_message} from code_writer_node
+    pr_after_code: Optional[bool]              # True when orchestrator detected combined code+PR intent
+    execute_after_code: Optional[bool]         # True when query also requested execution via Piston
+    execution_result: Optional[dict]           # {stdout, stderr, success} from execute_code()
+    data_result: Optional[dict]                # {table, chart_code, insights} from data_analyst_node
+    user_id: Optional[str]                     # authenticated user's UUID, injected by routes_agent

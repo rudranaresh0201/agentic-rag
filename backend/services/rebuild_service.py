@@ -18,8 +18,12 @@ def is_rebuild_locked() -> bool:
     return _rebuild_lock.locked()
 
 
-def rebuild_from_r2_if_empty() -> None:
+def rebuild_from_r2_if_empty(user_id: str | None = None) -> None:
     global _is_rebuilding
+
+    if user_id is None:
+        _logger.info("[REBUILD] No user_id supplied — skipping startup rebuild (per-user collections require an authenticated user).")
+        return
 
     # Lazy imports avoid circular dependencies at module load time.
     from ..db import get_collection
@@ -27,7 +31,7 @@ def rebuild_from_r2_if_empty() -> None:
     from ..ingestion import ingest_pdf_file_path
 
     try:
-        collection = get_collection()
+        collection = get_collection(user_id)
         if collection.count() > 0:
             _logger.info("[REBUILD] DB already has documents — skipping rebuild.")
             return
@@ -52,6 +56,7 @@ def rebuild_from_r2_if_empty() -> None:
                 try:
                     download_pdf_from_r2(key, local_path)
                     ingest_pdf_file_path(
+                        user_id,
                         str(local_path),
                         filename,
                         local_path.stat().st_size,

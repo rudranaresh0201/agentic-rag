@@ -17,7 +17,7 @@ from .config import RAG_RERANK_WINDOW, RAG_RRF_K, RAG_CHUNK_OVERLAP
 from .db import get_collection, get_embedder
 from .utils import chunk_text as _chunk_text_util
 
-_bm25_cache: dict[str, Any] | None = None
+_bm25_cache: dict[str, dict[str, Any]] = {}
 _bm25_lock = threading.Lock()
 _audit_lock = threading.Lock()
 AUDIT_LOG_PATH = Path(os.getenv("RETRIEVAL_AUDIT_PATH", Path(__file__).resolve().parent / "retrieval_audit.jsonl"))
@@ -256,13 +256,12 @@ def _build_bm25_corpus(
     return bm25_corpus, bm25_meta
 
 
-def warmup_bm25_index() -> None:
-    global _bm25_cache
+def warmup_bm25_index(user_id: str) -> None:
     with _bm25_lock:
-        collection = get_collection()
+        collection = get_collection(user_id)
         total_chunks = int(collection.count())
         if total_chunks <= 0:
-            _bm25_cache = None
+            _bm25_cache.pop(user_id, None)
             return
 
         all_results = collection.get(include=["documents", "metadatas"])
@@ -271,13 +270,13 @@ def warmup_bm25_index() -> None:
 
         bm25_corpus, bm25_meta = _build_bm25_corpus(all_docs, all_metas)
         if not bm25_corpus:
-            _bm25_cache = None
+            _bm25_cache.pop(user_id, None)
             return
 
         tokenized_chunks = [chunk.split() for chunk in bm25_corpus]
         bm25 = BM25Okapi(tokenized_chunks)
 
-        _bm25_cache = {
+        _bm25_cache[user_id] = {
             "count": total_chunks,
             "bm25": bm25,
             "corpus": bm25_corpus,
@@ -285,21 +284,23 @@ def warmup_bm25_index() -> None:
         }
 
 
-def _get_bm25_cache(total_chunks: int) -> dict[str, Any] | None:
+def _get_bm25_cache(user_id: str, total_chunks: int) -> dict[str, Any] | None:
     with _bm25_lock:
-        if not _bm25_cache:
+        user_cache = _bm25_cache.get(user_id)
+        if not user_cache:
             return None
-        if int(_bm25_cache.get("count", 0)) != int(total_chunks):
+        if int(user_cache.get("count", 0)) != int(total_chunks):
             return None
-        return _bm25_cache
+        return user_cache
 
 
 def retrieve_chunks(
     query: str,
+    user_id: str,
     top_k: int = 3,
     document_id: str | None = None,
 ) -> RetrievalResult:
-    collection = get_collection()
+    collection = get_collection(user_id)
     logger.info("[RAG] Query: %s", query)
     total_chunks = int(collection.count())
     logger.info("[RAG] Total chunks: %s", total_chunks)
@@ -328,7 +329,7 @@ def retrieve_chunks(
         show_progress_bar=False,
         normalize_embeddings=True,
     ).tolist()
-    return _retrieve_with_embedding(query, query_embedding, top_k, collection, total_chunks, document_id)
+    return _retrieve_with_embedding(query, query_embedding, top_k, collection, total_chunks, document_id, user_id)
 
 
 def _retrieve_with_embedding(
@@ -338,6 +339,7 @@ def _retrieve_with_embedding(
     collection,
     total_chunks: int,
     document_id: str | None = None,
+    user_id: str = "",
 ) -> RetrievalResult:
     """Vector search with the given embedding + BM25 on the original query string, fused via RRF."""
     query_keywords = _extract_query_keywords(query)
@@ -434,7 +436,7 @@ def _retrieve_with_embedding(
     bm25_meta: list[dict[str, Any]] = []
     bm25: BM25Okapi | None = None
 
-    cached = _get_bm25_cache(total_chunks) if document_id is None else None
+    cached = _get_bm25_cache(user_id, total_chunks) if document_id is None else None
     if cached:
         bm25 = cached.get("bm25")
         bm25_corpus = cached.get("corpus", [])
@@ -449,8 +451,7 @@ def _retrieve_with_embedding(
             bm25 = BM25Okapi(tokenized_chunks)
             if document_id is None:
                 with _bm25_lock:
-                    global _bm25_cache
-                    _bm25_cache = {
+                    _bm25_cache[user_id] = {
                         "count": total_chunks,
                         "bm25": bm25,
                         "corpus": bm25_corpus,
@@ -571,6 +572,7 @@ def _retrieve_with_embedding(
 def retrieve_chunks_hyde(
     query: str,
     hypothetical_embedding: list[float],
+    user_id: str,
     top_k: int = 3,
     document_id: str | None = None,
 ) -> RetrievalResult:
@@ -578,7 +580,7 @@ def retrieve_chunks_hyde(
 
     BM25 still runs on the original query string's keywords, so the two signals complement each other.
     """
-    collection = get_collection()
+    collection = get_collection(user_id)
     total_chunks = int(collection.count())
 
     if total_chunks <= 0:
@@ -598,4 +600,4 @@ def retrieve_chunks_hyde(
             "status": "no_context",
         }
 
-    return _retrieve_with_embedding(query, hypothetical_embedding, top_k, collection, total_chunks, document_id)
+    return _retrieve_with_embedding(query, hypothetical_embedding, top_k, collection, total_chunks, document_id, user_id)

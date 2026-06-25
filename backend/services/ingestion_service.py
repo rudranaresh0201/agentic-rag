@@ -15,7 +15,7 @@ from ..tasks import set_task_status, set_task_error
 logger = get_logger(__name__)
 
 
-def run_ingest_task(task_id: str, save_path: Path, safe_name: str, actual_size: int) -> None:
+def run_ingest_task(task_id: str, save_path: Path, safe_name: str, actual_size: int, user_id: str) -> None:
     doc_id = uuid.uuid4().hex
     s3_key = build_r2_key(doc_id, safe_name)
 
@@ -35,7 +35,7 @@ def run_ingest_task(task_id: str, save_path: Path, safe_name: str, actual_size: 
         content_hash = hasher.hexdigest()
         logger.info("[INGEST] SHA-256 hash computed: %s filename=%s", content_hash, safe_name)
 
-        collection = get_collection()
+        collection = get_collection(user_id)
 
         # -------- DEDUP CHECK --------
         existing = collection.get(where={"content_hash": content_hash})
@@ -57,6 +57,7 @@ def run_ingest_task(task_id: str, save_path: Path, safe_name: str, actual_size: 
         # -------- INGEST INTO CHROMA FIRST --------
         logger.info("[INGEST] Calling ingest_pdf_file_path for filename=%s", safe_name)
         result = ingest_pdf_file_path(
+            user_id,
             str(save_path),
             safe_name,
             actual_size,
@@ -77,7 +78,7 @@ def run_ingest_task(task_id: str, save_path: Path, safe_name: str, actual_size: 
 
         # -------- BM25 REBUILD --------
         try:
-            warmup_bm25_index()
+            warmup_bm25_index(user_id)
             logger.info("[INGEST] BM25 index rebuilt")
         except Exception as e:
             logger.warning("[BM25] Warmup failed: %s", e)
@@ -109,7 +110,7 @@ def run_ingest_task(task_id: str, save_path: Path, safe_name: str, actual_size: 
         )
 
         try:
-            get_collection().delete(where={"doc_id": doc_id})
+            get_collection(user_id).delete(where={"doc_id": doc_id})
             logger.info("[INGEST] Rolled back partial chunks for doc_id=%s", doc_id)
         except Exception as rollback_err:
             logger.warning("[INGEST] Rollback failed: %s", rollback_err)
